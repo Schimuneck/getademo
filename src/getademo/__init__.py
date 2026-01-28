@@ -16,3 +16,5 @@ Works with any website or web application via cursor-browser-extension MCP.
 
 __version__ = "0.1.0"
 __author__ = "Schimuneck"
+
+
