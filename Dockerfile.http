@@ -15,6 +15,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     firefox-esr \
     curl \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
 
 # Install uv
@@ -30,6 +32,11 @@ COPY scripts/ ./scripts/
 RUN chmod +x scripts/*.sh scripts/*.py && \
     uv pip install --system mcp starlette uvicorn playwright && \
     playwright install firefox --with-deps || true
+
+# Install Playwright MCP server (correct package name)
+RUN npm install -g @playwright/mcp playwright && \
+    npx playwright install firefox && \
+    npx playwright install-deps firefox || true
 
 # Add src to PYTHONPATH
 ENV PYTHONPATH=/app/src:$PYTHONPATH
@@ -60,8 +67,9 @@ DISPLAY=:99 openbox &
 sleep 1
 echo "Starting video server on port ${VIDEO_SERVER_PORT}..."
 python /app/scripts/video-server.py &
-echo "Starting MCP HTTP server on port ${MCP_PORT}..."
-exec python -m recorder.http_server
+echo "Starting MCP HTTP Multiplexer on port ${MCP_PORT}..."
+echo "This will expose all tools: demo-recorder (13) + Playwright (22) = 35 tools"
+exec python -m recorder.http_multiplexer
 SCRIPT
 RUN chmod +x /app/start.sh
 

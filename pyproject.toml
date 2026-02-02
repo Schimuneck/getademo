@@ -61,6 +61,7 @@ dev = [
 recorder = "recorder.server:run"
 recorder-multi = "recorder.mcp_multiplexer:run"
 recorder-http = "recorder.http_server:main"
+recorder-http-multi = "recorder.http_multiplexer:main"
 
 [project.urls]
 Homepage = "https://github.com/Schimuneck/demo-recorder-mcp"
