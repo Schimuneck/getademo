@@ -292,47 +292,50 @@ server = Server("getademo")
 
 @server.list_tools()
 async def list_tools() -> list[Tool]:
-    """List available tools."""
+    """List available tools.
+    
+    OpenAI Compatibility Notes:
+    - All schemas include "additionalProperties": false (required for strict mode)
+    - Tools with no parameters use empty properties object
+    - Array parameters (concatenate_videos) are supported but may need special handling
+    """
     return [
         Tool(
             name="start_recording",
-            description="Start video recording. Auto-detects browser window in container. IMPORTANT: Perform actions (scroll, click, type) AFTER calling this, not before. Actions before start_recording() are not captured. Keep scenes short (10-30s), stop recording, sync audio, then record next scene.",
+            description="Start video recording. Auto-detects browser window in container. Perform actions AFTER calling this. Keep scenes short (10-30s).",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "window_title": {
-                        "type": "string",
-                        "description": "Window title pattern (optional - auto-detects browser in container)"
-                    },
                     "output_path": {
                         "type": "string",
-                        "description": "Output video path. Default: recording_<timestamp>.mp4 in /app/recordings/"
+                        "description": "Output video path. Default: recording_<timestamp>.mp4"
                     }
                 },
-                "required": []
+                "required": [],
+                "additionalProperties": False
             }
         ),
         Tool(
             name="stop_recording",
-            description="Stop the current recording and save the video file. Returns file path, duration, and size.",
+            description="Stop the current recording and save the video file.",
             inputSchema={
                 "type": "object",
                 "properties": {},
-                "required": []
+                "additionalProperties": False
             }
         ),
         Tool(
             name="recording_status",
-            description="Check if a recording is in progress. Returns status, duration, file path, and file size.",
+            description="Check if a recording is in progress.",
             inputSchema={
                 "type": "object",
                 "properties": {},
-                "required": []
+                "additionalProperties": False
             }
         ),
         Tool(
             name="text_to_speech",
-            description="Convert text to speech audio. Uses OpenAI TTS with 'onyx' voice if OPENAI_API_KEY is set, otherwise Edge TTS. Returns audio file path and duration.",
+            description="Convert text to speech audio. Uses OpenAI TTS if API key set, else Edge TTS.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -342,10 +345,11 @@ async def list_tools() -> list[Tool]:
                     },
                     "output_path": {
                         "type": "string",
-                        "description": "Output audio path. Default: tts_<timestamp>.mp3 in /app/recordings/"
+                        "description": "Output audio path. Default: tts_<timestamp>.mp3"
                     }
                 },
-                "required": ["text"]
+                "required": ["text"],
+                "additionalProperties": False
             }
         ),
         Tool(
@@ -359,12 +363,13 @@ async def list_tools() -> list[Tool]:
                         "description": "Path to media file (video or audio)"
                     }
                 },
-                "required": ["file_path"]
+                "required": ["file_path"],
+                "additionalProperties": False
             }
         ),
         Tool(
             name="concatenate_videos",
-            description="Join multiple video files into one sequential video. Use AFTER syncing all scenes with adjust_video_to_audio(). Each scene should already have its audio baked in.",
+            description="Join multiple video files into one sequential video.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -378,12 +383,13 @@ async def list_tools() -> list[Tool]:
                         "description": "Output path for final concatenated video"
                     }
                 },
-                "required": ["video_paths", "output_path"]
+                "required": ["video_paths", "output_path"],
+                "additionalProperties": False
             }
         ),
         Tool(
             name="adjust_video_to_audio",
-            description="Sync video to audio by adjusting playback speed, then merge audio track. Preserves all visual content (no cutting). Video longer than audio speeds up; shorter slows down. Best results with short scenes (10-30s): a 20s video synced to 25s audio = natural 0.8x speed. A 90s video synced to 45s audio = unwatchable 2x speed.",
+            description="Sync video to audio by adjusting playback speed, then merge audio track. Preserves all visual content.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -400,63 +406,62 @@ async def list_tools() -> list[Tool]:
                         "description": "Output video path with synced audio"
                     }
                 },
-                "required": ["video_path", "audio_path", "output_path"]
+                "required": ["video_path", "audio_path", "output_path"],
+                "additionalProperties": False
             }
         ),
-        # Phase-based Protocol Tools
         Tool(
             name="planning_phase_1",
-            description="Phase 1: Demo planning guide. CRITICAL: Explains why demos must be recorded as short scenes (10-30s each), not one long video. Call FIRST before any demo. Next: setup_phase_2().",
+            description="Phase 1: Demo planning guide. Call FIRST before any demo.",
             inputSchema={
                 "type": "object",
                 "properties": {},
-                "required": []
+                "additionalProperties": False
             }
         ),
         Tool(
             name="setup_phase_2",
-            description="Phase 2: Pre-recording setup. Browser sizing with browser_resize(), window verification with list_windows(). Call after planning_phase_1(). Next: recording_phase_3().",
+            description="Phase 2: Pre-recording setup. Call after planning_phase_1.",
             inputSchema={
                 "type": "object",
                 "properties": {},
-                "required": []
+                "additionalProperties": False
             }
         ),
         Tool(
             name="recording_phase_3",
-            description="Phase 3: Recording actions guide. Scroll, click, type patterns and pacing for engaging demos. Call after setup_phase_2(). Next: editing_phase_4().",
+            description="Phase 3: Recording actions guide. Call after setup_phase_2.",
             inputSchema={
                 "type": "object",
                 "properties": {},
-                "required": []
+                "additionalProperties": False
             }
         ),
         Tool(
             name="editing_phase_4",
-            description="Phase 4: Post-recording assembly. Audio sync with adjust_video_to_audio(), concatenation, quality checks. Call after recording_phase_3().",
+            description="Phase 4: Post-recording assembly. Call after recording_phase_3.",
             inputSchema={
                 "type": "object",
                 "properties": {},
-                "required": []
+                "additionalProperties": False
             }
         ),
-        # Window Management Tools
         Tool(
             name="list_windows",
-            description="List all windows in the virtual display. Returns titles, IDs, bounds. In container: shows Firefox browser. Use output for start_recording() window_title parameter. IMPORTANT: Browser window only exists AFTER browser_navigate() is called - if this returns empty, navigate to a URL first.",
+            description="List all windows in the virtual display. Call after browser_navigate().",
             inputSchema={
                 "type": "object",
                 "properties": {},
-                "required": []
+                "additionalProperties": False
             }
         ),
         Tool(
             name="window_tools",
-            description="Check availability of window management tools (wmctrl, xdotool). Returns platform info and dependency status.",
+            description="Check availability of window management tools (wmctrl, xdotool).",
             inputSchema={
                 "type": "object",
                 "properties": {},
-                "required": []
+                "additionalProperties": False
             }
         ),
     ]

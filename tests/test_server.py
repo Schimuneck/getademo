@@ -216,6 +216,60 @@ class TestFfmpegPath:
             assert "ffmpeg not found" in str(e)
 
 
+class TestOpenAICompatibility:
+    """Tests for OpenAI function calling compatibility."""
+
+    @pytest.mark.asyncio
+    async def test_all_schemas_have_additional_properties_false(self):
+        """Test that all tool schemas have additionalProperties: false for OpenAI strict mode."""
+        from recorder.server import list_tools
+        
+        tools = await list_tools()
+        
+        for tool in tools:
+            schema = tool.inputSchema
+            assert "additionalProperties" in schema, f"Tool {tool.name} missing additionalProperties"
+            assert schema["additionalProperties"] is False, f"Tool {tool.name} additionalProperties should be False"
+
+    @pytest.mark.asyncio
+    async def test_tool_names_are_valid(self):
+        """Test that tool names only use allowed characters (a-z, A-Z, 0-9, _)."""
+        from recorder.server import list_tools
+        import re
+        
+        tools = await list_tools()
+        valid_pattern = re.compile(r'^[a-zA-Z0-9_]+$')
+        
+        for tool in tools:
+            assert valid_pattern.match(tool.name), f"Tool name '{tool.name}' contains invalid characters"
+
+    @pytest.mark.asyncio
+    async def test_descriptions_are_reasonable_length(self):
+        """Test that descriptions are not too long (OpenAI recommends concise descriptions)."""
+        from recorder.server import list_tools
+        
+        tools = await list_tools()
+        max_length = 500  # Reasonable limit for descriptions
+        
+        for tool in tools:
+            assert len(tool.description) <= max_length, f"Tool {tool.name} description too long ({len(tool.description)} chars)"
+
+    @pytest.mark.asyncio
+    async def test_required_properties_exist_in_properties(self):
+        """Test that all required properties are defined in properties."""
+        from recorder.server import list_tools
+        
+        tools = await list_tools()
+        
+        for tool in tools:
+            schema = tool.inputSchema
+            required = schema.get("required", [])
+            properties = schema.get("properties", {})
+            
+            for req in required:
+                assert req in properties, f"Tool {tool.name}: required property '{req}' not in properties"
+
+
 class TestWindowManager:
     """Tests for window manager functionality."""
 
