@@ -45,13 +45,18 @@ services:
       start_period: 60s
     labels:
       - "traefik.enable=true"
-      # MCP SSE endpoint - priority 1 (lower = checked last, so videos path takes precedence)
+      # MCP endpoint - priority 1 (lower = checked last, so videos path takes precedence)
       - "traefik.http.routers.mcp-api.rule=Host(`mcp.tutorialsbot.com`)"
       - "traefik.http.routers.mcp-api.entrypoints=websecure"
       - "traefik.http.routers.mcp-api.tls.certresolver=letsencrypt"
       - "traefik.http.routers.mcp-api.priority=1"
       - "traefik.http.routers.mcp-api.service=mcp-api-svc"
+      - "traefik.http.routers.mcp-api.middlewares=mcp-timeout@docker"
+      # MCP service with extended timeout - MCP tools can take minutes to process
       - "traefik.http.services.mcp-api-svc.loadbalancer.server.port=8080"
+      - "traefik.http.services.mcp-api-svc.loadbalancer.responseforwarding.flushinterval=100ms"
+      # Timeout middleware for MCP - 5 minutes for long-running operations
+      - "traefik.http.middlewares.mcp-timeout.headers.customrequestheaders.X-Forwarded-Timeout=300"
       # Video server endpoint - priority 2 (higher = checked first for /videos path)
       - "traefik.http.routers.mcp-videos.rule=Host(`mcp.tutorialsbot.com`) && PathPrefix(`/videos`)"
       - "traefik.http.routers.mcp-videos.entrypoints=websecure"

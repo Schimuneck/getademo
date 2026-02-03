@@ -38,11 +38,11 @@ VIDEO_SERVER_PORT = int(os.environ.get("VIDEO_SERVER_PORT", 8080))
 VIDEO_SERVER_HOST = os.environ.get("VIDEO_SERVER_HOST", "localhost")
 
 # Create the FastMCP server
-mcp = FastMCP("demo-recorder")
+mcp = FastMCP("demo-recorder", stateless_http=True)
 
 
-def get_video_url(file_path: Path) -> Optional[str]:
-    """Generate a URL to access a video file via the HTTP server.
+def get_media_url(file_path: Path) -> Optional[str]:
+    """Generate a URL to access a media file (video or audio) via the HTTP server.
     
     Only works when running in a container with the video server.
     Returns None if the file is not in the recordings directory.
@@ -66,15 +66,21 @@ def get_video_url(file_path: Path) -> Optional[str]:
         return None
 
 
-def get_default_output_path(filename: str) -> Path:
-    """Get the default output path for recordings.
+def resolve_media_path(filename: str) -> Path:
+    """Resolve a filename to its full path in the media directory.
     
-    In container: saves to /app/recordings/<filename>
-    On host: saves to current directory
+    All media files are stored in CONTAINER_RECORDINGS_DIR (/app/recordings).
+    This function converts a simple filename to its absolute path.
+    
+    Args:
+        filename: Just the filename (e.g., "scene1.mp4")
+        
+    Returns:
+        Full path (e.g., Path("/app/recordings/scene1.mp4"))
     """
-    if is_container_environment():
-        return CONTAINER_RECORDINGS_DIR / filename
-    return Path.cwd() / filename
+    # Ensure the recordings directory exists
+    CONTAINER_RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+    return CONTAINER_RECORDINGS_DIR / filename
 
 
 # Global state for recording
@@ -299,20 +305,28 @@ def get_window_capture_args(window_title: str) -> tuple[list[str], Optional[str]
 # =============================================================================
 
 @mcp.tool(description="Start video recording. Auto-detects browser window in container. Perform actions AFTER calling this. Keep scenes short (10-30s).")
-async def start_recording(output_path: str = None) -> str:
-    """Start video recording."""
+async def start_recording(filename: str = None) -> str:
+    """Start video recording.
+    
+    Args:
+        filename: Output filename (e.g., "scene1.mp4"). Auto-generated if not provided.
+                  File is saved to the recordings directory.
+    """
     global _recording_process, _recording_path, _recording_start_time, _recording_log_file, _recording_last_size
     
     if _recording_process is not None and _recording_process.poll() is None:
         return "Recording already in progress. Stop it first."
     
-    # Auto-generate output path if not provided
-    if output_path:
-        out_path = Path(output_path)
-    else:
+    # Auto-generate filename if not provided
+    if not filename:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_path = get_default_output_path(f"recording_{timestamp}.mp4")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+        filename = f"recording_{timestamp}.mp4"
+    
+    # Ensure .mp4 extension
+    if not filename.endswith('.mp4'):
+        filename += '.mp4'
+    
+    out_path = resolve_media_path(filename)
     
     # WINDOW MODE ONLY - simplest and cleanest approach
     window_title = None
@@ -447,10 +461,14 @@ async def start_recording(output_path: str = None) -> str:
             f"Command attempted: {' '.join(cmd)}"
         )
     
+    url = get_media_url(out_path)
+    url_info = f"URL: {url}\n" if url else ""
+    
     return (
         f"Recording started!\n"
         f"{mode_info}\n"
-        f"Output: {out_path}\n"
+        f"Output: {filename}\n"
+        f"{url_info}"
         f"Resolution: {width}x{height} @ {fps}fps\n"
         f"Started at: {_recording_start_time.strftime('%H:%M:%S')}\n\n"
         f"Use 'stop_recording' when done."
@@ -551,12 +569,13 @@ async def stop_recording() -> str:
             pass  # Log cleanup is optional
     
     # Generate URL if in container
-    url = get_video_url(output_path) if output_path else None
+    url = get_media_url(output_path) if output_path else None
     url_info = f"URL: {url}\n" if url else ""
+    filename = output_path.name if output_path else "unknown"
     
     return (
         f"Recording stopped!\n"
-        f"Output: {output_path}\n"
+        f"Output: {filename}\n"
         f"{url_info}"
         f"Duration: {duration:.1f} seconds\n"
         f"File size: {file_size:.1f} MB"
@@ -588,10 +607,11 @@ async def recording_status() -> str:
     
     size_mb = current_size / (1024 * 1024)
     health_status = "✓ Healthy (file growing)" if size_growing else "⚠ Warning: File not growing!"
+    filename = _recording_path.name if _recording_path else "unknown"
     
     return (
         f"Recording in progress\n"
-        f"Output: {_recording_path}\n"
+        f"Output: {filename}\n"
         f"Duration: {duration:.1f} seconds\n"
         f"File size: {size_mb:.2f} MB\n"
         f"Health: {health_status}\n"
@@ -604,15 +624,24 @@ async def recording_status() -> str:
 # =============================================================================
 
 @mcp.tool(description="Convert text to speech audio. Uses OpenAI TTS if API key set, else Edge TTS.")
-async def text_to_speech(text: str, output_path: str = None) -> str:
-    """Generate speech from text."""
-    # Auto-generate output path if not provided
-    if output_path:
-        out_path = Path(output_path)
-    else:
+async def text_to_speech(text: str, filename: str = None) -> str:
+    """Generate speech from text.
+    
+    Args:
+        text: The text to convert to speech.
+        filename: Output filename (e.g., "narration.mp3"). Auto-generated if not provided.
+                  File is saved to the recordings directory.
+    """
+    # Auto-generate filename if not provided
+    if not filename:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_path = get_default_output_path(f"tts_{timestamp}.mp3")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+        filename = f"tts_{timestamp}.mp3"
+    
+    # Ensure .mp3 extension
+    if not filename.endswith('.mp3'):
+        filename += '.mp3'
+    
+    out_path = resolve_media_path(filename)
     
     # Simplified: Always use "onyx" voice, auto-detect engine from API key
     voice = "onyx"  # Professional, clear voice - best for demos
@@ -654,12 +683,12 @@ async def text_to_speech(text: str, output_path: str = None) -> str:
     file_size = out_path.stat().st_size / 1024 if out_path.exists() else 0
     duration = await _get_audio_duration(out_path)
     
-    url = get_video_url(out_path)  # Also works for audio files
+    url = get_media_url(out_path)
     url_info = f"URL: {url}\n" if url else ""
     
     return (
         f"Audio generated!\n"
-        f"Output: {out_path}\n"
+        f"Output: {filename}\n"
         f"{url_info}"
         f"Engine: {engine} ({voice})\n"
         f"Duration: {duration:.1f} seconds\n"
@@ -688,13 +717,17 @@ async def _get_audio_duration(path: Path) -> float:
 # Media Tools
 # =============================================================================
 
-@mcp.tool(description="Get metadata for a video or audio file: duration, resolution, codecs, file size.")
-async def media_info(file_path: str) -> str:
-    """Get media file information."""
-    path = Path(file_path)
+@mcp.tool(description="Get metadata for a video or audio file: duration, resolution, codecs, file size, and URL.")
+async def media_info(filename: str) -> str:
+    """Get media file information including download URL.
+    
+    Args:
+        filename: The filename to get info for (e.g., "scene1.mp4").
+    """
+    path = resolve_media_path(filename)
     
     if not path.exists():
-        return f"File not found: {path}"
+        return f"File not found: {filename}"
     
     ffmpeg = get_ffmpeg_path()
     ffprobe = ffmpeg.replace("ffmpeg", "ffprobe")
@@ -722,7 +755,12 @@ async def media_info(file_path: str) -> str:
     video_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
     audio_stream = next((s for s in streams if s.get("codec_type") == "audio"), None)
     
-    output = f"Media Info: {path.name}\n"
+    # Get URL for accessing the file
+    url = get_media_url(path)
+    
+    output = f"Media Info: {filename}\n"
+    if url:
+        output += f"URL: {url}\n"
     output += f"Duration: {duration:.1f}s ({duration/60:.1f}m)\n"
     output += f"Size: {size_mb:.1f} MB\n"
     
@@ -742,13 +780,80 @@ async def media_info(file_path: str) -> str:
     return output
 
 
-@mcp.tool(description="Join multiple video files into one sequential video.")
-async def concatenate_videos(video_paths: list[str], output_path: str) -> str:
-    """Concatenate multiple videos."""
-    paths = [Path(p) for p in video_paths]
-    out_path = Path(output_path)
+@mcp.tool(description="List all media files (videos and audio) in the recordings directory with URLs.")
+async def list_media_files() -> str:
+    """List all available media files with their URLs, sizes, and durations."""
+    # Ensure directory exists
+    CONTAINER_RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
     
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    # Get all media files (videos and audio)
+    media_extensions = {'.mp4', '.mp3', '.wav', '.webm', '.mkv', '.avi', '.m4a'}
+    files = []
+    
+    for file_path in CONTAINER_RECORDINGS_DIR.iterdir():
+        if file_path.is_file() and file_path.suffix.lower() in media_extensions:
+            files.append(file_path)
+    
+    if not files:
+        return "No media files found in recordings directory."
+    
+    # Sort by modification time (newest first)
+    files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+    
+    ffmpeg = get_ffmpeg_path()
+    ffprobe = ffmpeg.replace("ffmpeg", "ffprobe")
+    
+    output = f"Media Files ({len(files)} files):\n\n"
+    
+    for i, file_path in enumerate(files, 1):
+        filename = file_path.name
+        size_mb = file_path.stat().st_size / (1024 * 1024)
+        
+        # Determine type based on extension
+        ext = file_path.suffix.lower()
+        if ext in {'.mp4', '.webm', '.mkv', '.avi'}:
+            file_type = "video"
+        else:
+            file_type = "audio"
+        
+        # Get duration
+        try:
+            result = subprocess.run(
+                [ffprobe, "-v", "quiet", "-show_entries", "format=duration",
+                 "-of", "default=noprint_wrappers=1:nokey=1", str(file_path)],
+                capture_output=True, text=True
+            )
+            duration = float(result.stdout.strip()) if result.stdout.strip() else 0
+        except:
+            duration = 0
+        
+        # Get URL
+        url = get_media_url(file_path)
+        
+        output += f"{i}. {filename}\n"
+        if url:
+            output += f"   URL: {url}\n"
+        output += f"   Size: {size_mb:.1f} MB | Duration: {duration:.1f}s | Type: {file_type}\n\n"
+    
+    return output
+
+
+@mcp.tool(description="Join multiple video files into one sequential video.")
+async def concatenate_videos(filenames: list[str], output_filename: str) -> str:
+    """Concatenate multiple videos.
+    
+    Args:
+        filenames: List of video filenames to concatenate (e.g., ["scene1.mp4", "scene2.mp4"]).
+        output_filename: Output filename for the merged video (e.g., "final.mp4").
+    """
+    paths = [resolve_media_path(f) for f in filenames]
+    out_path = resolve_media_path(output_filename)
+    
+    # Check all input files exist
+    for i, path in enumerate(paths):
+        if not path.exists():
+            return f"File not found: {filenames[i]}"
+    
     ffmpeg = get_ffmpeg_path()
     
     # Create concat file
@@ -775,19 +880,19 @@ async def concatenate_videos(video_paths: list[str], output_path: str) -> str:
     finally:
         os.unlink(concat_file)
     
-    url = get_video_url(out_path)
+    url = get_media_url(out_path)
     url_info = f"URL: {url}\n" if url else ""
     
     return (
         f"Videos concatenated!\n"
-        f"Output: {out_path}\n"
+        f"Output: {output_filename}\n"
         f"{url_info}"
         f"Videos merged: {len(paths)}"
     )
 
 
 @mcp.tool(description="Sync video to audio by adjusting playback speed, then merge audio track. Preserves all visual content.")
-async def adjust_video_to_audio(video_path: str, audio_path: str, output_path: str) -> str:
+async def adjust_video_to_audio(video_filename: str, audio_filename: str, output_filename: str) -> str:
     """
     Adjust video speed to match audio duration, then merge the audio.
     
@@ -797,17 +902,20 @@ async def adjust_video_to_audio(video_path: str, audio_path: str, output_path: s
     - Video longer than audio -> Speed UP (faster playback)
     - Video shorter than audio -> Slow DOWN (slower playback)
     - ALWAYS merges the audio into the output video
+    
+    Args:
+        video_filename: Input video filename (e.g., "scene1_raw.mp4").
+        audio_filename: Input audio filename (e.g., "scene1_audio.mp3").
+        output_filename: Output filename for synced video (e.g., "scene1_final.mp4").
     """
-    vid_path = Path(video_path)
-    aud_path = Path(audio_path)
-    out_path = Path(output_path)
+    vid_path = resolve_media_path(video_filename)
+    aud_path = resolve_media_path(audio_filename)
+    out_path = resolve_media_path(output_filename)
     
     if not vid_path.exists():
-        return f"Video not found: {vid_path}"
+        return f"Video not found: {video_filename}"
     if not aud_path.exists():
-        return f"Audio not found: {aud_path}"
-    
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+        return f"Audio not found: {audio_filename}"
     ffmpeg = get_ffmpeg_path()
     ffprobe = ffmpeg.replace("ffmpeg", "ffprobe")
     
@@ -874,7 +982,7 @@ async def adjust_video_to_audio(video_path: str, audio_path: str, output_path: s
     final_duration = await _get_audio_duration(out_path)
     file_size = out_path.stat().st_size / (1024 * 1024) if out_path.exists() else 0
     
-    url = get_video_url(out_path)
+    url = get_media_url(out_path)
     url_info = f"URL: {url}\n" if url else ""
     
     return (
@@ -883,7 +991,7 @@ async def adjust_video_to_audio(video_path: str, audio_path: str, output_path: s
         f"Speed: {speed_change}\n"
         f"Video: {video_duration:.2f}s -> {final_duration:.2f}s\n"
         f"Audio: {audio_duration:.2f}s (merged)\n"
-        f"Output: {out_path}\n"
+        f"Output: {output_filename}\n"
         f"{url_info}"
         f"Size: {file_size:.1f} MB\n"
         f"ALL visual content preserved (no frames cut)"

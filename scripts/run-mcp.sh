@@ -17,7 +17,7 @@ case "$1" in
         ;;
     "multi"|"")
         # Multiplexer mode (default) - runs both MCPs and exposes all tools
-        exec recorder-multi
+        exec recorder-proxy
         ;;
     *)
         echo "Usage: run-mcp.sh [playwright|demo-recorder|multi]" >&2
