@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-getademo - MCP Server for Demo Recording
+demo-recorder - FastMCP Server for Demo Recording
 
 Provides tools for:
 - Screen recording (start/stop)
@@ -22,9 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from mcp.server import Server
-from mcp.server.stdio import stdio_server
-from mcp.types import Tool, TextContent
+from fastmcp import FastMCP
 
 from .protocol import (
     get_planning_guide,
@@ -38,6 +36,9 @@ from . import window_manager
 CONTAINER_RECORDINGS_DIR = Path("/app/recordings")
 VIDEO_SERVER_PORT = int(os.environ.get("VIDEO_SERVER_PORT", 8080))
 VIDEO_SERVER_HOST = os.environ.get("VIDEO_SERVER_HOST", "localhost")
+
+# Create the FastMCP server
+mcp = FastMCP("demo-recorder")
 
 
 def get_video_url(file_path: Path) -> Optional[str]:
@@ -293,282 +294,32 @@ def get_window_capture_args(window_title: str) -> tuple[list[str], Optional[str]
         return [], None, f"Unsupported platform: {sys.platform}"
 
 
-# Create the MCP server
-server = Server("getademo")
+# =============================================================================
+# Recording Tools
+# =============================================================================
 
-
-@server.list_tools()
-async def list_tools() -> list[Tool]:
-    """List available tools."""
-    return [
-        Tool(
-            name="start_recording",
-            description="Start video recording. Auto-detects browser window in container. Perform actions AFTER calling this. Keep scenes short (10-30s).",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "output_path": {
-                        "type": "string",
-                        "description": "Output video path. Default: recording_<timestamp>.mp4"
-                    }
-                },
-                "required": [],
-                "additionalProperties": False
-            }
-        ),
-        Tool(
-            name="stop_recording",
-            description="Stop the current recording and save the video file.",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "additionalProperties": False
-            }
-        ),
-        Tool(
-            name="recording_status",
-            description="Check if a recording is in progress.",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "additionalProperties": False
-            }
-        ),
-        Tool(
-            name="text_to_speech",
-            description="Convert text to speech audio. Uses OpenAI TTS if API key set, else Edge TTS.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "text": {
-                        "type": "string",
-                        "description": "Text to convert to speech"
-                    },
-                    "output_path": {
-                        "type": "string",
-                        "description": "Output audio path. Default: tts_<timestamp>.mp3"
-                    }
-                },
-                "required": ["text"],
-                "additionalProperties": False
-            }
-        ),
-        Tool(
-            name="media_info",
-            description="Get metadata for a video or audio file: duration, resolution, codecs, file size.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "file_path": {
-                        "type": "string",
-                        "description": "Path to media file (video or audio)"
-                    }
-                },
-                "required": ["file_path"],
-                "additionalProperties": False
-            }
-        ),
-        Tool(
-            name="concatenate_videos",
-            description="Join multiple video files into one sequential video.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "video_paths": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Ordered list of video paths to concatenate"
-                    },
-                    "output_path": {
-                        "type": "string",
-                        "description": "Output path for final concatenated video"
-                    }
-                },
-                "required": ["video_paths", "output_path"],
-                "additionalProperties": False
-            }
-        ),
-        Tool(
-            name="adjust_video_to_audio",
-            description="Sync video to audio by adjusting playback speed, then merge audio track. Preserves all visual content.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "video_path": {
-                        "type": "string",
-                        "description": "Input video file path"
-                    },
-                    "audio_path": {
-                        "type": "string",
-                        "description": "Audio file path (determines output duration)"
-                    },
-                    "output_path": {
-                        "type": "string",
-                        "description": "Output video path with synced audio"
-                    }
-                },
-                "required": ["video_path", "audio_path", "output_path"],
-                "additionalProperties": False
-            }
-        ),
-        Tool(
-            name="planning_phase_1",
-            description="Phase 1: Demo planning guide. Call FIRST before any demo.",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "additionalProperties": False
-            }
-        ),
-        Tool(
-            name="setup_phase_2",
-            description="Phase 2: Pre-recording setup. Call after planning_phase_1.",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "additionalProperties": False
-            }
-        ),
-        Tool(
-            name="recording_phase_3",
-            description="Phase 3: Recording actions guide. Call after setup_phase_2.",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "additionalProperties": False
-            }
-        ),
-        Tool(
-            name="editing_phase_4",
-            description="Phase 4: Post-recording assembly. Call after recording_phase_3.",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "additionalProperties": False
-            }
-        ),
-        Tool(
-            name="list_windows",
-            description="List all windows in the virtual display. Call after browser_navigate().",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "additionalProperties": False
-            }
-        ),
-        Tool(
-            name="window_tools",
-            description="Check availability of window management tools (wmctrl, xdotool).",
-            inputSchema={
-                "type": "object",
-                "properties": {},
-                "additionalProperties": False
-            }
-        ),
-    ]
-
-
-@server.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    """Handle tool calls."""
-    global _recording_process, _recording_path, _recording_start_time
-    
-    try:
-        if name == "start_recording":
-            return await _start_recording(arguments)
-        
-        elif name == "stop_recording":
-            return await _stop_recording()
-        
-        elif name == "recording_status":
-            return await _recording_status()
-        
-        elif name == "text_to_speech":
-            return await _text_to_speech(arguments)
-        
-        
-        elif name == "media_info":
-            return await _get_media_info(arguments)
-        
-        # Backward compatibility alias
-        elif name == "get_media_info":
-            return await _get_media_info(arguments)
-        
-        elif name == "concatenate_videos":
-            return await _concatenate_videos(arguments)
-        
-        elif name == "adjust_video_to_audio":
-            return await _adjust_video_to_audio(arguments)
-        
-        # Backward compatibility - old name still works
-        elif name == "adjust_video_to_audio_length":
-            return await _adjust_video_to_audio(arguments)
-        
-        # Phase-based Protocol Tools (renamed for clarity)
-        elif name == "planning_phase_1":
-            return [TextContent(type="text", text=get_planning_guide())]
-        
-        elif name == "setup_phase_2":
-            return [TextContent(type="text", text=get_setup_guide())]
-        
-        elif name == "recording_phase_3":
-            return [TextContent(type="text", text=get_recording_guide())]
-        
-        elif name == "editing_phase_4":
-            return [TextContent(type="text", text=get_assembly_guide())]
-        
-        # Backward compatibility aliases for old guide tool names
-        elif name == "get_demo_planning_guide":
-            return [TextContent(type="text", text=get_planning_guide())]
-        
-        elif name == "get_recording_setup_guide":
-            return [TextContent(type="text", text=get_setup_guide())]
-        
-        elif name == "get_recording_actions_guide":
-            return [TextContent(type="text", text=get_recording_guide())]
-        
-        elif name == "get_video_assembly_guide":
-            return [TextContent(type="text", text=get_assembly_guide())]
-        
-        # Window Management Tools
-        elif name == "list_windows":
-            return await _list_windows()
-        
-        elif name == "window_tools":
-            return await _check_window_tools()
-        
-        # Backward compatibility alias
-        elif name == "check_window_tools":
-            return await _check_window_tools()
-        
-        else:
-            return [TextContent(type="text", text=f"Unknown tool: {name}")]
-    
-    except Exception as e:
-        return [TextContent(type="text", text=f"Error: {str(e)}")]
-
-
-async def _start_recording(args: dict) -> list[TextContent]:
-    """Start recording with support for multiple capture modes."""
+@mcp.tool(description="Start video recording. Auto-detects browser window in container. Perform actions AFTER calling this. Keep scenes short (10-30s).")
+async def start_recording(output_path: str = None) -> str:
+    """Start video recording."""
     global _recording_process, _recording_path, _recording_start_time, _recording_log_file, _recording_last_size
     
     if _recording_process is not None and _recording_process.poll() is None:
-        return [TextContent(type="text", text="Recording already in progress. Stop it first.")]
+        return "Recording already in progress. Stop it first."
     
     # Auto-generate output path if not provided
-    if "output_path" in args and args["output_path"]:
-        output_path = Path(args["output_path"])
+    if output_path:
+        out_path = Path(output_path)
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = get_default_output_path(f"recording_{timestamp}.mp4")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path = get_default_output_path(f"recording_{timestamp}.mp4")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     
     # WINDOW MODE ONLY - simplest and cleanest approach
-    window_title = args.get("window_title")
+    window_title = None
     fps = 30  # Hardcoded - optimal for demos
     
-    # Auto-detect browser window if not specified (container mode)
-    if not window_title and is_container_environment():
+    # Auto-detect browser window (container mode)
+    if is_container_environment():
         # Try common browser window patterns
         for pattern in ["Nightly", "Firefox", "Chromium", "Chrome"]:
             try:
@@ -579,14 +330,13 @@ async def _start_recording(args: dict) -> list[TextContent]:
                 continue
     
     if not window_title:
-        return [TextContent(
-            type="text",
-            text="ERROR: Could not auto-detect browser window.\n\n"
-                 "Make sure you have navigated to a URL first (browser_navigate).\n"
-                 "Then either:\n"
-                 "  - Just call start_recording() - it will auto-detect the browser\n"
-                 "  - Or specify window_title='Firefox' explicitly"
-        )]
+        return (
+            "ERROR: Could not auto-detect browser window.\n\n"
+            "Make sure you have navigated to a URL first (browser_navigate).\n"
+            "Then either:\n"
+            "  - Just call start_recording() - it will auto-detect the browser\n"
+            "  - Or specify window_title='Firefox' explicitly"
+        )
     
     ffmpeg = get_ffmpeg_path()
     
@@ -601,7 +351,7 @@ async def _start_recording(args: dict) -> list[TextContent]:
     # Get window capture arguments
     capture_args, crop_filter, error = get_window_capture_args(window_title)
     if error:
-        return [TextContent(type="text", text=f"Window capture error: {error}\n\nRun list_windows() to verify the window exists.")]
+        return f"Window capture error: {error}\n\nRun list_windows() to verify the window exists."
     
     # Get window bounds for output size - always use actual window dimensions
     try:
@@ -638,11 +388,11 @@ async def _start_recording(args: dict) -> list[TextContent]:
         # Use fragmented MP4 for crash recovery - writes metadata throughout the file
         # instead of only at the end (moov atom issue)
         "-movflags", "frag_keyframe+empty_moov",
-        str(output_path)
+        str(out_path)
     ])
     
     # Create log file for FFmpeg output (prevents pipe buffer deadlock for long recordings)
-    log_path = output_path.with_suffix('.ffmpeg.log')
+    log_path = out_path.with_suffix('.ffmpeg.log')
     _recording_log_file = open(log_path, 'w')
     
     # Start the process with output going to log file instead of pipes
@@ -653,7 +403,7 @@ async def _start_recording(args: dict) -> list[TextContent]:
         stdout=_recording_log_file,
         stderr=subprocess.STDOUT  # Combine stderr into same log file
     )
-    _recording_path = output_path
+    _recording_path = out_path
     _recording_start_time = datetime.now()
     _recording_last_size = 0
     
@@ -690,34 +440,33 @@ async def _start_recording(args: dict) -> list[TextContent]:
                 f"3. Restart Cursor after granting permission"
             )
         
-        return [TextContent(
-            type="text",
-            text=f"Recording failed to start!\n\n"
-                 f"Error: {error_msg}\n\n"
-                 f"{troubleshooting}\n\n"
-                 f"Command attempted: {' '.join(cmd)}"
-        )]
+        return (
+            f"Recording failed to start!\n\n"
+            f"Error: {error_msg}\n\n"
+            f"{troubleshooting}\n\n"
+            f"Command attempted: {' '.join(cmd)}"
+        )
     
-    return [TextContent(
-        type="text",
-        text=f"Recording started!\n"
-             f"{mode_info}\n"
-             f"Output: {output_path}\n"
-             f"Resolution: {width}x{height} @ {fps}fps\n"
-             f"Started at: {_recording_start_time.strftime('%H:%M:%S')}\n\n"
-             f"Use 'stop_recording' when done."
-    )]
+    return (
+        f"Recording started!\n"
+        f"{mode_info}\n"
+        f"Output: {out_path}\n"
+        f"Resolution: {width}x{height} @ {fps}fps\n"
+        f"Started at: {_recording_start_time.strftime('%H:%M:%S')}\n\n"
+        f"Use 'stop_recording' when done."
+    )
 
 
-async def _stop_recording() -> list[TextContent]:
+@mcp.tool(description="Stop the current recording and save the video file.")
+async def stop_recording() -> str:
     """Stop screen recording."""
     global _recording_process, _recording_path, _recording_start_time, _recording_log_file, _recording_last_size
     
     if _recording_process is None:
-        return [TextContent(type="text", text="No recording in progress.")]
+        return "No recording in progress."
     
     if _recording_process.poll() is not None:
-        return [TextContent(type="text", text="Recording already stopped.")]
+        return "Recording already stopped."
     
     duration = (datetime.now() - _recording_start_time).total_seconds() if _recording_start_time else 0
     output_path = _recording_path
@@ -805,22 +554,22 @@ async def _stop_recording() -> list[TextContent]:
     url = get_video_url(output_path) if output_path else None
     url_info = f"URL: {url}\n" if url else ""
     
-    return [TextContent(
-        type="text",
-        text=f"Recording stopped!\n"
-             f"Output: {output_path}\n"
-             f"{url_info}"
-             f"Duration: {duration:.1f} seconds\n"
-             f"File size: {file_size:.1f} MB"
-    )]
+    return (
+        f"Recording stopped!\n"
+        f"Output: {output_path}\n"
+        f"{url_info}"
+        f"Duration: {duration:.1f} seconds\n"
+        f"File size: {file_size:.1f} MB"
+    )
 
 
-async def _recording_status() -> list[TextContent]:
+@mcp.tool(description="Check if a recording is in progress.")
+async def recording_status() -> str:
     """Get recording status with health monitoring."""
     global _recording_process, _recording_path, _recording_start_time, _recording_last_size
     
     if _recording_process is None or _recording_process.poll() is not None:
-        return [TextContent(type="text", text="No recording in progress.")]
+        return "No recording in progress."
     
     duration = (datetime.now() - _recording_start_time).total_seconds() if _recording_start_time else 0
     
@@ -840,28 +589,30 @@ async def _recording_status() -> list[TextContent]:
     size_mb = current_size / (1024 * 1024)
     health_status = "✓ Healthy (file growing)" if size_growing else "⚠ Warning: File not growing!"
     
-    return [TextContent(
-        type="text",
-        text=f"Recording in progress\n"
-             f"Output: {_recording_path}\n"
-             f"Duration: {duration:.1f} seconds\n"
-             f"File size: {size_mb:.2f} MB\n"
-             f"Health: {health_status}\n"
-             f"Started: {_recording_start_time.strftime('%H:%M:%S')}"
-    )]
+    return (
+        f"Recording in progress\n"
+        f"Output: {_recording_path}\n"
+        f"Duration: {duration:.1f} seconds\n"
+        f"File size: {size_mb:.2f} MB\n"
+        f"Health: {health_status}\n"
+        f"Started: {_recording_start_time.strftime('%H:%M:%S')}"
+    )
 
 
-async def _text_to_speech(args: dict) -> list[TextContent]:
+# =============================================================================
+# Text-to-Speech Tool
+# =============================================================================
+
+@mcp.tool(description="Convert text to speech audio. Uses OpenAI TTS if API key set, else Edge TTS.")
+async def text_to_speech(text: str, output_path: str = None) -> str:
     """Generate speech from text."""
-    text = args["text"]
-    
     # Auto-generate output path if not provided
-    if "output_path" in args and args["output_path"]:
-        output_path = Path(args["output_path"])
+    if output_path:
+        out_path = Path(output_path)
     else:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_path = get_default_output_path(f"tts_{timestamp}.mp3")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path = get_default_output_path(f"tts_{timestamp}.mp3")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     
     # Simplified: Always use "onyx" voice, auto-detect engine from API key
     voice = "onyx"  # Professional, clear voice - best for demos
@@ -879,10 +630,10 @@ async def _text_to_speech(args: dict) -> list[TextContent]:
                 voice=voice,
                 input=text
             )
-            response.stream_to_file(str(output_path))
+            response.stream_to_file(str(out_path))
             
         except Exception as e:
-            return [TextContent(type="text", text=f"OpenAI TTS error: {str(e)}")]
+            return f"OpenAI TTS error: {str(e)}"
     else:
         # Fallback to Edge TTS (free, no API key needed)
         engine = "edge"
@@ -891,31 +642,30 @@ async def _text_to_speech(args: dict) -> list[TextContent]:
             import edge_tts
             
             communicate = edge_tts.Communicate(text, edge_voice)
-            await communicate.save(str(output_path))
+            await communicate.save(str(out_path))
             voice = edge_voice  # Update for output message
             
         except ImportError:
-            return [TextContent(type="text", text="No OPENAI_API_KEY set and edge-tts not installed.\n\nOptions:\n1. Set OPENAI_API_KEY environment variable (recommended)\n2. Install edge-tts: pip install edge-tts")]
+            return "No OPENAI_API_KEY set and edge-tts not installed.\n\nOptions:\n1. Set OPENAI_API_KEY environment variable (recommended)\n2. Install edge-tts: pip install edge-tts"
         except Exception as e:
-            return [TextContent(type="text", text=f"Edge TTS error: {str(e)}")]
+            return f"Edge TTS error: {str(e)}"
     
     # Get file info
-    file_size = output_path.stat().st_size / 1024 if output_path.exists() else 0
-    duration = await _get_audio_duration(output_path)
+    file_size = out_path.stat().st_size / 1024 if out_path.exists() else 0
+    duration = await _get_audio_duration(out_path)
     
-    url = get_video_url(output_path)  # Also works for audio files
+    url = get_video_url(out_path)  # Also works for audio files
     url_info = f"URL: {url}\n" if url else ""
     
-    return [TextContent(
-        type="text",
-        text=f"Audio generated!\n"
-             f"Output: {output_path}\n"
-             f"{url_info}"
-             f"Engine: {engine} ({voice})\n"
-             f"Duration: {duration:.1f} seconds\n"
-             f"Size: {file_size:.1f} KB\n"
-             f"Text length: {len(text)} characters"
-    )]
+    return (
+        f"Audio generated!\n"
+        f"Output: {out_path}\n"
+        f"{url_info}"
+        f"Engine: {engine} ({voice})\n"
+        f"Duration: {duration:.1f} seconds\n"
+        f"Size: {file_size:.1f} KB\n"
+        f"Text length: {len(text)} characters"
+    )
 
 
 async def _get_audio_duration(path: Path) -> float:
@@ -934,12 +684,17 @@ async def _get_audio_duration(path: Path) -> float:
         return 0.0
 
 
-async def _get_media_info(args: dict) -> list[TextContent]:
+# =============================================================================
+# Media Tools
+# =============================================================================
+
+@mcp.tool(description="Get metadata for a video or audio file: duration, resolution, codecs, file size.")
+async def media_info(file_path: str) -> str:
     """Get media file information."""
-    file_path = Path(args["file_path"])
+    path = Path(file_path)
     
-    if not file_path.exists():
-        return [TextContent(type="text", text=f"File not found: {file_path}")]
+    if not path.exists():
+        return f"File not found: {path}"
     
     ffmpeg = get_ffmpeg_path()
     ffprobe = ffmpeg.replace("ffmpeg", "ffprobe")
@@ -948,13 +703,13 @@ async def _get_media_info(args: dict) -> list[TextContent]:
         ffprobe, "-v", "quiet",
         "-print_format", "json",
         "-show_format", "-show_streams",
-        str(file_path)
+        str(path)
     ]
     
     result = subprocess.run(cmd, capture_output=True, text=True)
     
     if result.returncode != 0:
-        return [TextContent(type="text", text=f"Error: {result.stderr}")]
+        return f"Error: {result.stderr}"
     
     info = json.loads(result.stdout)
     fmt = info.get("format", {})
@@ -967,7 +722,7 @@ async def _get_media_info(args: dict) -> list[TextContent]:
     video_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
     audio_stream = next((s for s in streams if s.get("codec_type") == "audio"), None)
     
-    output = f"Media Info: {file_path.name}\n"
+    output = f"Media Info: {path.name}\n"
     output += f"Duration: {duration:.1f}s ({duration/60:.1f}m)\n"
     output += f"Size: {size_mb:.1f} MB\n"
     
@@ -984,20 +739,21 @@ async def _get_media_info(args: dict) -> list[TextContent]:
         codec = audio_stream.get("codec_name", "?")
         output += f"Audio: {sample_rate}Hz, {channels}ch ({codec})\n"
     
-    return [TextContent(type="text", text=output)]
+    return output
 
 
-async def _concatenate_videos(args: dict) -> list[TextContent]:
+@mcp.tool(description="Join multiple video files into one sequential video.")
+async def concatenate_videos(video_paths: list[str], output_path: str) -> str:
     """Concatenate multiple videos."""
-    video_paths = [Path(p) for p in args["video_paths"]]
-    output_path = Path(args["output_path"])
+    paths = [Path(p) for p in video_paths]
+    out_path = Path(output_path)
     
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     ffmpeg = get_ffmpeg_path()
     
     # Create concat file
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
-        for path in video_paths:
+        for path in paths:
             f.write(f"file '{path.absolute()}'\n")
         concat_file = f.name
     
@@ -1008,30 +764,30 @@ async def _concatenate_videos(args: dict) -> list[TextContent]:
             "-safe", "0",
             "-i", concat_file,
             "-c", "copy",
-            str(output_path)
+            str(out_path)
         ]
         
         result = subprocess.run(cmd, capture_output=True, text=True)
         
         if result.returncode != 0:
-            return [TextContent(type="text", text=f"Error: {result.stderr}")]
+            return f"Error: {result.stderr}"
     
     finally:
         os.unlink(concat_file)
     
-    url = get_video_url(output_path)
+    url = get_video_url(out_path)
     url_info = f"URL: {url}\n" if url else ""
     
-    return [TextContent(
-        type="text",
-        text=f"Videos concatenated!\n"
-             f"Output: {output_path}\n"
-             f"{url_info}"
-             f"Videos merged: {len(video_paths)}"
-    )]
+    return (
+        f"Videos concatenated!\n"
+        f"Output: {out_path}\n"
+        f"{url_info}"
+        f"Videos merged: {len(paths)}"
+    )
 
 
-async def _adjust_video_to_audio(args: dict) -> list[TextContent]:
+@mcp.tool(description="Sync video to audio by adjusting playback speed, then merge audio track. Preserves all visual content.")
+async def adjust_video_to_audio(video_path: str, audio_path: str, output_path: str) -> str:
     """
     Adjust video speed to match audio duration, then merge the audio.
     
@@ -1042,34 +798,34 @@ async def _adjust_video_to_audio(args: dict) -> list[TextContent]:
     - Video shorter than audio -> Slow DOWN (slower playback)
     - ALWAYS merges the audio into the output video
     """
-    video_path = Path(args["video_path"])
-    audio_path = Path(args["audio_path"])
-    output_path = Path(args["output_path"])
+    vid_path = Path(video_path)
+    aud_path = Path(audio_path)
+    out_path = Path(output_path)
     
-    if not video_path.exists():
-        return [TextContent(type="text", text=f"Video not found: {video_path}")]
-    if not audio_path.exists():
-        return [TextContent(type="text", text=f"Audio not found: {audio_path}")]
+    if not vid_path.exists():
+        return f"Video not found: {vid_path}"
+    if not aud_path.exists():
+        return f"Audio not found: {aud_path}"
     
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     ffmpeg = get_ffmpeg_path()
     ffprobe = ffmpeg.replace("ffmpeg", "ffprobe")
     
     # Get audio duration
-    audio_duration = await _get_audio_duration(audio_path)
+    audio_duration = await _get_audio_duration(aud_path)
     if audio_duration <= 0:
-        return [TextContent(type="text", text="Could not determine audio duration")]
+        return "Could not determine audio duration"
     
     # Get video duration
     result = subprocess.run(
         [ffprobe, "-v", "quiet", "-show_entries", "format=duration",
-         "-of", "default=noprint_wrappers=1:nokey=1", str(video_path)],
+         "-of", "default=noprint_wrappers=1:nokey=1", str(vid_path)],
         capture_output=True, text=True
     )
     video_duration = float(result.stdout.strip()) if result.stdout.strip() else 0
     
     if video_duration <= 0:
-        return [TextContent(type="text", text="Could not determine video duration")]
+        return "Could not determine video duration"
     
     # Calculate speed factor
     # speed_factor > 1 = speed up (video longer than audio)
@@ -1095,8 +851,8 @@ async def _adjust_video_to_audio(args: dict) -> list[TextContent]:
     # Always merge audio (the whole point of this tool)
     cmd = [
         ffmpeg, "-y",
-        "-i", str(video_path),
-        "-i", str(audio_path),
+        "-i", str(vid_path),
+        "-i", str(aud_path),
         "-filter_complex",
         f"[0:v]setpts=PTS/{speed_factor}[v]",
         "-map", "[v]",
@@ -1106,46 +862,74 @@ async def _adjust_video_to_audio(args: dict) -> list[TextContent]:
         "-crf", "23",
         "-c:a", "aac",
         "-shortest",
-        str(output_path)
+        str(out_path)
     ]
     
     result = subprocess.run(cmd, capture_output=True, text=True)
     
     if result.returncode != 0:
-        return [TextContent(type="text", text=f"Error: {result.stderr}")]
+        return f"Error: {result.stderr}"
     
     # Get final duration
-    final_duration = await _get_audio_duration(output_path)
-    file_size = output_path.stat().st_size / (1024 * 1024) if output_path.exists() else 0
+    final_duration = await _get_audio_duration(out_path)
+    file_size = out_path.stat().st_size / (1024 * 1024) if out_path.exists() else 0
     
-    url = get_video_url(output_path)
+    url = get_video_url(out_path)
     url_info = f"URL: {url}\n" if url else ""
     
-    return [TextContent(
-        type="text",
-        text=f"Video synced to audio!\n"
-             f"Action: {action}\n"
-             f"Speed: {speed_change}\n"
-             f"Video: {video_duration:.2f}s -> {final_duration:.2f}s\n"
-             f"Audio: {audio_duration:.2f}s (merged)\n"
-             f"Output: {output_path}\n"
-             f"{url_info}"
-             f"Size: {file_size:.1f} MB\n"
-             f"ALL visual content preserved (no frames cut)"
-    )]
+    return (
+        f"Video synced to audio!\n"
+        f"Action: {action}\n"
+        f"Speed: {speed_change}\n"
+        f"Video: {video_duration:.2f}s -> {final_duration:.2f}s\n"
+        f"Audio: {audio_duration:.2f}s (merged)\n"
+        f"Output: {out_path}\n"
+        f"{url_info}"
+        f"Size: {file_size:.1f} MB\n"
+        f"ALL visual content preserved (no frames cut)"
+    )
 
 
 # =============================================================================
-# Window Management Tool Implementations
+# Protocol/Guide Tools
 # =============================================================================
 
-async def _list_windows() -> list[TextContent]:
+@mcp.tool(description="Phase 1: Demo planning guide. Call FIRST before any demo.")
+async def planning_phase_1() -> str:
+    """Get phase 1 planning guide."""
+    return get_planning_guide()
+
+
+@mcp.tool(description="Phase 2: Pre-recording setup. Call after planning_phase_1.")
+async def setup_phase_2() -> str:
+    """Get phase 2 setup guide."""
+    return get_setup_guide()
+
+
+@mcp.tool(description="Phase 3: Recording actions guide. Call after setup_phase_2.")
+async def recording_phase_3() -> str:
+    """Get phase 3 recording guide."""
+    return get_recording_guide()
+
+
+@mcp.tool(description="Phase 4: Post-recording assembly. Call after recording_phase_3.")
+async def editing_phase_4() -> str:
+    """Get phase 4 editing guide."""
+    return get_assembly_guide()
+
+
+# =============================================================================
+# Window Management Tools
+# =============================================================================
+
+@mcp.tool(description="List all windows in the virtual display. Call after browser_navigate().")
+async def list_windows() -> str:
     """List all visible windows."""
     try:
         windows = window_manager.list_windows()
         
         if not windows:
-            return [TextContent(type="text", text="No visible windows found.")]
+            return "No visible windows found."
         
         output = f"Found {len(windows)} visible windows:\n\n"
         for i, win in enumerate(windows, 1):
@@ -1160,15 +944,16 @@ async def _list_windows() -> list[TextContent]:
                 output += f"w={win.bounds.width}, h={win.bounds.height}\n"
             output += "\n"
         
-        return [TextContent(type="text", text=output)]
+        return output
     
     except window_manager.DependencyMissingError as e:
-        return [TextContent(type="text", text=f"Missing dependencies: {str(e)}")]
+        return f"Missing dependencies: {str(e)}"
     except window_manager.WindowManagerError as e:
-        return [TextContent(type="text", text=f"Error listing windows: {str(e)}")]
+        return f"Error listing windows: {str(e)}"
 
 
-async def _check_window_tools() -> list[TextContent]:
+@mcp.tool(description="Check availability of window management tools (wmctrl, xdotool).")
+async def window_tools() -> str:
     """Check window management tool availability."""
     deps = window_manager.check_dependencies()
     
@@ -1187,21 +972,22 @@ async def _check_window_tools() -> list[TextContent]:
             output += f"  Fedora/RHEL:   sudo dnf install wmctrl xdotool\n"
             output += f"  Arch:          sudo pacman -S wmctrl xdotool\n"
     
-    return [TextContent(type="text", text=output)]
+    return output
 
 
-async def main():
-    """Run the MCP server."""
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(read_stream, write_stream, server.create_initialization_options())
-
+# =============================================================================
+# Entry Points
+# =============================================================================
 
 def run():
-    """Entry point."""
-    asyncio.run(main())
+    """Entry point for STDIO transport (default)."""
+    mcp.run()
+
+
+def main():
+    """Entry point for HTTP transport."""
+    mcp.run(transport="sse")
 
 
 if __name__ == "__main__":
     run()
-
-

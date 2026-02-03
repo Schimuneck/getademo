@@ -30,7 +30,7 @@ COPY src/ ./src/
 COPY scripts/ ./scripts/
 
 RUN chmod +x scripts/*.sh scripts/*.py && \
-    uv pip install --system mcp starlette uvicorn playwright && \
+    uv pip install --system fastmcp playwright && \
     playwright install firefox --with-deps || true
 
 # Install Playwright MCP server (correct package name)
@@ -55,25 +55,10 @@ ENV CONTAINER=docker
 
 EXPOSE 8080 8090
 
-# Startup script
-RUN cat > /app/start.sh << 'SCRIPT'
-#!/bin/bash
-set -e
-echo "Starting Xvfb..."
-Xvfb :99 -screen 0 ${XVFB_RESOLUTION} &
-sleep 2
-echo "Starting openbox..."
-DISPLAY=:99 openbox &
-sleep 1
-echo "Starting video server on port ${VIDEO_SERVER_PORT}..."
-python /app/scripts/video-server.py &
-echo "Starting MCP HTTP Multiplexer on port ${MCP_PORT}..."
-echo "This will expose all tools: demo-recorder (13) + Playwright (22) = 35 tools"
-exec python -m recorder.http_multiplexer
-SCRIPT
-RUN chmod +x /app/start.sh
+# scripts/start-http.sh is the startup script
+RUN chmod +x /app/scripts/start-http.sh
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
     CMD curl -f http://localhost:${MCP_PORT}/health || exit 1
 
-CMD ["/app/start.sh"]
+CMD ["/app/scripts/start-http.sh"]
