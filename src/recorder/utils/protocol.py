@@ -51,16 +51,6 @@ section, even if continuing on the same page.
 
 ---
 
-## Container Environment
-
-This runs in Docker with Xvfb virtual display. The browser (Firefox) renders to
-display :99 and is always recordable. No visibility issues exist.
-
-Use start_recording() and stop_recording() - they capture real video at 30fps.
-Do NOT use screenshots or Playwright's built-in video.
-
----
-
 ## Core Workflow: Per-Scene Process
 
 Complete EACH scene fully before starting the next:
@@ -396,15 +386,10 @@ Next phase: editing_phase_4()
 
 ---
 
-## CRITICAL: Keep Scenes SHORT
+## REMINDER: Keep Scenes SHORT (10-30 seconds max)
 
-**Each recording should be 10-30 seconds max.**
-
-Why: Audio sync adjusts playback speed. A 60-second video synced to 30-second
-audio plays at 2x speed (too fast). A 15-second video synced to 20-second
-audio plays at 0.75x (slightly slow, looks natural).
-
-**Stop recording frequently.** It's better to have 6 short scenes than 1 long one.
+Audio sync adjusts playback speed - long recordings play too fast.
+See planning_phase_1() for duration guidelines and scene structure.
 
 ---
 
@@ -422,26 +407,12 @@ audio plays at 0.75x (slightly slow, looks natural).
 7. SYNC with audio before next scene
 ```
 
-## WRONG vs CORRECT
+## REMINDER: Actions DURING Recording
 
-**WRONG** - Action outside recording (static video):
-```python
-browser_scroll(400)           # NOT RECORDED - wasted!
-start_recording()
-browser_wait_for(time=5)      # Just shows static page
-stop_recording()
-```
+**All actions must happen BETWEEN start_recording() and stop_recording().**
+See planning_phase_1() for the full WRONG vs CORRECT pattern.
 
-**CORRECT** - Action inside recording (dynamic video):
-```python
-start_recording()
-browser_wait_for(time=2)
-browser_scroll(400)           # RECORDED - viewer sees motion!
-browser_wait_for(time=2)
-stop_recording()
-```
-
-**Rule: If you want viewers to SEE an action, it must happen DURING recording.**
+Key rule: If you want viewers to SEE an action, it must happen DURING recording.
 
 ---
 
@@ -589,23 +560,10 @@ the video is static. The recording only captures what happens AFTER it starts.
 
 ---
 
-## Verification Workflow
+## Verification
 
-BEFORE recording:
-```
-browser_snapshot()           # Capture state
-# Examine: Is correct content visible?
-# IF NO: Navigate/scroll, re-snapshot
-# IF YES: Proceed to record
-```
-
-AFTER recording:
-```
-browser_snapshot()           # Capture end state  
-# Examine: Did recording capture intended content?
-# IF NO: Delete recording, re-record
-# IF YES: Proceed to audio sync
-```
+Always snapshot BEFORE and AFTER each recording to verify content.
+See setup_phase_2() for the detailed verification workflow.
 
 ---
 

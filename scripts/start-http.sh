@@ -13,6 +13,6 @@ echo "Starting video server on port ${VIDEO_SERVER_PORT:-8090}..."
 python /app/scripts/video-server.py &
 
 echo "Starting FastMCP Proxy Multiplexer on port ${MCP_PORT:-8080}..."
-echo "This will expose all tools: demo-recorder (13) + Playwright (22) = 35 tools"
-exec python -m recorder.proxy_multiplexer
+echo "This will expose all tools: demo-recorder (14) + Playwright (22) = 36 tools"
+exec recorder-proxy
 

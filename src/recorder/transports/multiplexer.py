@@ -205,12 +205,19 @@ def main():
     """Run the proxy multiplexer server."""
     global proxy
     
+    # Check for transport mode via environment variable
+    transport_mode = os.environ.get("MCP_TRANSPORT", "http").lower()
+    
     host = os.environ.get("MCP_HOST", "0.0.0.0")
     port = int(os.environ.get("MCP_PORT", "8080"))
     
-    logger.info(f"Starting MCP Proxy Multiplexer on {host}:{port}")
-    logger.info("Using streamable-HTTP transport at /mcp/ for OpenAI compatibility")
-    logger.info("See: https://gofastmcp.com/integrations/openai")
+    if transport_mode == "stdio":
+        logger.info("Starting MCP Proxy Multiplexer with STDIO transport")
+        logger.info("All 36 tools (demo-recorder + Playwright) available")
+    else:
+        logger.info(f"Starting MCP Proxy Multiplexer on {host}:{port}")
+        logger.info("Using streamable-HTTP transport at /mcp/ for OpenAI compatibility")
+        logger.info("See: https://gofastmcp.com/integrations/openai")
     
     # Create lifespan context manager for starting/stopping Playwright
     @asynccontextmanager
@@ -236,7 +243,7 @@ def main():
     proxy = FastMCP("demo-recorder", stateless_http=True, lifespan=lifespan)
     
     # Import and register all demo-recorder tools from server.py
-    from .server import mcp as demo_recorder_mcp
+    from ..server import mcp as demo_recorder_mcp
     
     # Copy tools from demo-recorder to proxy
     async def copy_tools():
@@ -254,17 +261,22 @@ def main():
     # Add custom routes
     _register_custom_routes(proxy)
     
-    # Use HTTP transport (streamable-http) - required for OpenAI Responses API
-    # path="/mcp/" with trailing slash to match OpenAI's expected URL format
-    # json_response=True for clients that only accept application/json
-    # See: https://gofastmcp.com/integrations/openai
-    proxy.run(
-        transport="http",
-        host=host,
-        port=port,
-        path="/mcp/",
-        json_response=True,
-    )
+    # Run with selected transport
+    if transport_mode == "stdio":
+        # STDIO mode for Cursor and other MCP clients
+        proxy.run(transport="stdio")
+    else:
+        # HTTP transport (streamable-http) - required for OpenAI Responses API
+        # path="/mcp/" with trailing slash to match OpenAI's expected URL format
+        # json_response=True for clients that only accept application/json
+        # See: https://gofastmcp.com/integrations/openai
+        proxy.run(
+            transport="http",
+            host=host,
+            port=port,
+            path="/mcp/",
+            json_response=True,
+        )
 
 
 def _register_playwright_tools(mcp_instance: FastMCP):

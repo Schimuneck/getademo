@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Window Manager - Cross-platform window management for getademo
+Window Manager - Cross-platform window management.
 
 Provides platform-agnostic window management functionality:
 - List visible windows
@@ -17,27 +17,9 @@ import re
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List
 
-
-@dataclass
-class WindowBounds:
-    """Window position and size."""
-    x: int
-    y: int
-    width: int
-    height: int
-
-
-@dataclass
-class WindowInfo:
-    """Information about a window."""
-    title: str
-    window_id: str
-    pid: Optional[int]
-    bounds: Optional[WindowBounds]
-    app_name: Optional[str] = None
+from ..core.types import WindowBounds, WindowInfo
 
 
 class WindowManagerError(Exception):
@@ -56,7 +38,7 @@ class WindowNotFoundError(WindowManagerError):
 
 
 # =============================================================================
-# Platform Detection and Backend Selection
+# Platform Detection
 # =============================================================================
 
 def get_platform() -> str:
@@ -72,20 +54,10 @@ def get_platform() -> str:
 
 
 def check_dependencies() -> dict:
-    """
-    Check if required dependencies are available for the current platform.
-    
-    Returns:
-        dict with keys:
-            - platform: str
-            - available: bool
-            - missing: list[str]
-            - message: str
-    """
+    """Check if required dependencies are available for the current platform."""
     platform = get_platform()
     
     if platform == "macos":
-        # macOS uses built-in osascript
         return {
             "platform": platform,
             "available": True,
@@ -116,7 +88,6 @@ def check_dependencies() -> dict:
         }
     
     elif platform == "windows":
-        # Windows uses built-in ctypes
         return {
             "platform": platform,
             "available": True,
@@ -134,12 +105,11 @@ def check_dependencies() -> dict:
 
 
 # =============================================================================
-# macOS Backend (AppleScript via osascript)
+# macOS Backend
 # =============================================================================
 
-def _macos_list_windows() -> list[WindowInfo]:
+def _macos_list_windows() -> List[WindowInfo]:
     """List windows on macOS using AppleScript."""
-    # Use a simpler, more reliable AppleScript
     script = '''
 set output to ""
 tell application "System Events"
@@ -169,9 +139,7 @@ return output
             capture_output=True, text=True, timeout=15
         )
         
-        # Check for errors
         if result.returncode != 0 and result.stderr:
-            # Check if it's a permission error
             if "not allowed" in result.stderr.lower() or "assistive" in result.stderr.lower():
                 raise WindowManagerError(
                     "Permission denied. Grant accessibility access:\n"
@@ -184,7 +152,6 @@ return output
         output = result.stdout.strip()
         
         if not output:
-            # Try alternative method using window list from running apps
             return _macos_list_windows_fallback()
         
         for line in output.split("\n"):
@@ -222,7 +189,7 @@ return output
         raise WindowManagerError(f"Failed to list windows: {e}")
 
 
-def _macos_list_windows_fallback() -> list[WindowInfo]:
+def _macos_list_windows_fallback() -> List[WindowInfo]:
     """Fallback method using running applications."""
     script = '''
 set output to ""
@@ -257,15 +224,9 @@ return output
 
 
 def _macos_focus_window(title_pattern: str) -> bool:
-    """
-    Focus a SPECIFIC window on macOS using AppleScript.
-    
-    This raises ONLY the matching window, not all windows of the application.
-    Uses AXRaise action to bring just the specific window to front.
-    """
+    """Focus a window on macOS using AppleScript."""
     pattern = re.compile(title_pattern, re.IGNORECASE)
     
-    # First, find the specific window we want to focus
     try:
         windows = _macos_list_windows()
     except WindowManagerError:
@@ -280,17 +241,12 @@ def _macos_focus_window(title_pattern: str) -> bool:
     if not matching:
         raise WindowNotFoundError(f"No window matching '{title_pattern}'")
     
-    # Escape quotes in the window title for AppleScript
     escaped_title = matching.title.replace('"', '\\"') if matching.title else ""
     escaped_app = matching.app_name.replace('"', '\\"') if matching.app_name else ""
     
-    # Use AXRaise to raise ONLY this specific window (not all app windows)
-    # This is the key difference - AXRaise raises just the window, not the whole app
     script = f'''
 tell application "System Events"
     set targetProc to first application process whose name is "{escaped_app}"
-    
-    -- Find the specific window by title
     set targetWindow to missing value
     repeat with win in windows of targetProc
         if name of win is "{escaped_title}" then
@@ -298,11 +254,8 @@ tell application "System Events"
             exit repeat
         end if
     end repeat
-    
-    -- Raise only this specific window
     if targetWindow is not missing value then
         perform action "AXRaise" of targetWindow
-        -- Make the process frontmost so the window accepts input
         set frontmost of targetProc to true
         return "ok"
     else
@@ -318,47 +271,10 @@ end tell
         )
         if "ok" in result.stdout:
             return True
-    except Exception as e:
+    except Exception:
         pass
     
-    # Fallback: Try using window index if we have PID
-    # This approach raises the specific window by searching all windows of the process
-    if matching.pid:
-        script = f'''
-tell application "System Events"
-    set targetProc to first application process whose unix id is {matching.pid}
-    set allWindows to windows of targetProc
-    
-    repeat with win in allWindows
-        try
-            if name of win contains "{escaped_title[:30]}" then
-                perform action "AXRaise" of win
-                set frontmost of targetProc to true
-                return "ok"
-            end if
-        end try
-    end repeat
-    
-    -- If no match by title, just raise the first window
-    if (count of allWindows) > 0 then
-        perform action "AXRaise" of (item 1 of allWindows)
-        set frontmost of targetProc to true
-        return "ok"
-    end if
-end tell
-return "failed"
-'''
-        try:
-            result = subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True, text=True, timeout=5
-            )
-            if "ok" in result.stdout:
-                return True
-        except Exception:
-            pass
-    
-    # Last resort: just make the process frontmost (this may bring all windows)
+    # Fallback: make process frontmost
     if matching.app_name:
         script = f'''
 tell application "System Events"
@@ -390,8 +306,7 @@ def _macos_get_window_bounds(title_pattern: str) -> WindowBounds:
 
 
 def _macos_get_window_id(title_pattern: str) -> Optional[int]:
-    """Get the CGWindowID for a window on macOS (used for window-specific recording)."""
-    # Use CGWindowListCopyWindowInfo to get window IDs
+    """Get CGWindowID for a window on macOS."""
     script = '''
     use framework "Foundation"
     use framework "AppKit"
@@ -436,7 +351,7 @@ def _macos_get_window_id(title_pattern: str) -> Optional[int]:
 
 
 # =============================================================================
-# Linux Backend (wmctrl + xdotool)
+# Linux Backend
 # =============================================================================
 
 def _linux_check_deps():
@@ -446,12 +361,11 @@ def _linux_check_deps():
         raise DependencyMissingError(deps["message"])
 
 
-def _linux_list_windows() -> list[WindowInfo]:
+def _linux_list_windows() -> List[WindowInfo]:
     """List windows on Linux using wmctrl."""
     _linux_check_deps()
     
     try:
-        # wmctrl -l -G -p gives: window_id desktop pid x y w h hostname title
         result = subprocess.run(
             ["wmctrl", "-l", "-G", "-p"],
             capture_output=True, text=True, timeout=5
@@ -461,7 +375,7 @@ def _linux_list_windows() -> list[WindowInfo]:
         for line in result.stdout.strip().split("\n"):
             if not line:
                 continue
-            parts = line.split(None, 8)  # Split on whitespace, max 9 parts
+            parts = line.split(None, 8)
             if len(parts) >= 9:
                 window_id = parts[0]
                 pid = int(parts[2]) if parts[2] != "-1" else None
@@ -499,7 +413,6 @@ def _linux_focus_window(title_pattern: str) -> bool:
         raise WindowNotFoundError(f"No window matching '{title_pattern}'")
     
     try:
-        # wmctrl -i -a activates window by id
         subprocess.run(
             ["wmctrl", "-i", "-a", matching.window_id],
             capture_output=True, timeout=5
@@ -524,11 +437,10 @@ def _linux_get_window_bounds(title_pattern: str) -> WindowBounds:
 
 
 def _linux_get_window_id(title_pattern: str) -> Optional[str]:
-    """Get X11 window ID for a window on Linux."""
+    """Get X11 window ID on Linux."""
     _linux_check_deps()
     
     try:
-        # xdotool search returns window IDs
         result = subprocess.run(
             ["xdotool", "search", "--name", title_pattern],
             capture_output=True, text=True, timeout=5
@@ -543,17 +455,15 @@ def _linux_get_window_id(title_pattern: str) -> Optional[str]:
 
 
 # =============================================================================
-# Windows Backend (ctypes with Win32 API)
+# Windows Backend
 # =============================================================================
 
-def _windows_list_windows() -> list[WindowInfo]:
+def _windows_list_windows() -> List[WindowInfo]:
     """List windows on Windows using Win32 API."""
     import ctypes
     from ctypes import wintypes
     
     user32 = ctypes.windll.user32
-    
-    # Define callback type
     WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
     
     windows = []
@@ -566,11 +476,9 @@ def _windows_list_windows() -> list[WindowInfo]:
                 user32.GetWindowTextW(hwnd, buffer, length + 1)
                 title = buffer.value
                 
-                # Get window rect
                 rect = wintypes.RECT()
                 user32.GetWindowRect(hwnd, ctypes.byref(rect))
                 
-                # Get process ID
                 pid = wintypes.DWORD()
                 user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
                 
@@ -592,7 +500,7 @@ def _windows_list_windows() -> list[WindowInfo]:
 
 
 def _windows_focus_window(title_pattern: str) -> bool:
-    """Focus a window on Windows using Win32 API."""
+    """Focus a window on Windows."""
     import ctypes
     
     windows = _windows_list_windows()
@@ -609,8 +517,6 @@ def _windows_focus_window(title_pattern: str) -> bool:
     
     user32 = ctypes.windll.user32
     hwnd = int(matching.window_id)
-    
-    # Bring window to foreground
     user32.SetForegroundWindow(hwnd)
     user32.BringWindowToTop(hwnd)
     
@@ -632,7 +538,7 @@ def _windows_get_window_bounds(title_pattern: str) -> WindowBounds:
 
 
 def _windows_get_window_id(title_pattern: str) -> Optional[str]:
-    """Get window handle (HWND) for a window on Windows."""
+    """Get HWND for a window on Windows."""
     windows = _windows_list_windows()
     pattern = re.compile(title_pattern, re.IGNORECASE)
     
@@ -644,20 +550,11 @@ def _windows_get_window_id(title_pattern: str) -> Optional[str]:
 
 
 # =============================================================================
-# Public API - Platform-agnostic functions
+# Public API
 # =============================================================================
 
-def list_windows() -> list[WindowInfo]:
-    """
-    List all visible windows on the system.
-    
-    Returns:
-        List of WindowInfo objects containing title, id, pid, and bounds.
-    
-    Raises:
-        DependencyMissingError: If required tools are not installed (Linux).
-        WindowManagerError: If listing windows fails.
-    """
+def list_windows() -> List[WindowInfo]:
+    """List all visible windows on the system."""
     platform = get_platform()
     
     if platform == "macos":
@@ -671,20 +568,7 @@ def list_windows() -> list[WindowInfo]:
 
 
 def focus_window(title_pattern: str) -> bool:
-    """
-    Bring a window to the foreground by title pattern.
-    
-    Args:
-        title_pattern: Regex pattern to match window title (case-insensitive).
-    
-    Returns:
-        True if the window was focused successfully.
-    
-    Raises:
-        WindowNotFoundError: If no window matches the pattern.
-        DependencyMissingError: If required tools are not installed (Linux).
-        WindowManagerError: If focusing fails.
-    """
+    """Bring a window to the foreground by title pattern."""
     platform = get_platform()
     
     if platform == "macos":
@@ -698,20 +582,7 @@ def focus_window(title_pattern: str) -> bool:
 
 
 def get_window_bounds(title_pattern: str) -> WindowBounds:
-    """
-    Get the position and size of a window by title pattern.
-    
-    Args:
-        title_pattern: Regex pattern to match window title (case-insensitive).
-    
-    Returns:
-        WindowBounds with x, y, width, height.
-    
-    Raises:
-        WindowNotFoundError: If no window matches the pattern.
-        DependencyMissingError: If required tools are not installed (Linux).
-        WindowManagerError: If getting bounds fails.
-    """
+    """Get the position and size of a window by title pattern."""
     platform = get_platform()
     
     if platform == "macos":
@@ -725,19 +596,7 @@ def get_window_bounds(title_pattern: str) -> WindowBounds:
 
 
 def get_window_id(title_pattern: str) -> Optional[str]:
-    """
-    Get the platform-specific window identifier for recording.
-    
-    Args:
-        title_pattern: Regex pattern to match window title (case-insensitive).
-    
-    Returns:
-        Window ID suitable for the platform's recording mechanism:
-        - macOS: CGWindowID (for screencapture -l)
-        - Linux: X11 Window ID
-        - Windows: HWND
-        Returns None if window not found.
-    """
+    """Get the platform-specific window identifier."""
     platform = get_platform()
     
     if platform == "macos":
@@ -749,5 +608,3 @@ def get_window_id(title_pattern: str) -> Optional[str]:
         return _windows_get_window_id(title_pattern)
     else:
         return None
-
-

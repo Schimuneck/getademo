@@ -58,8 +58,8 @@ dev = [
 
 [project.scripts]
 recorder = "recorder.server:run"
-recorder-http = "recorder.http_server:main"
-recorder-proxy = "recorder.proxy_multiplexer:main"
+recorder-http = "recorder.transports.http:main"
+recorder-proxy = "recorder.transports.multiplexer:main"
 
 [project.urls]
 Homepage = "https://github.com/Schimuneck/demo-recorder-mcp"

@@ -1,5 +1,5 @@
 #!/bin/bash
-# getademo installer
+# Demo Recorder MCP installer
 # Installs dependencies, configures environment, and sets up Cursor MCP
 
 set -e
@@ -19,8 +19,8 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; }
 
 echo ""
 echo "╔═══════════════════════════════════════════════════════════╗"
-echo "║              getademo Installer v0.1.0                    ║"
-echo "║     MCP Server for Professional Demo Recording            ║"
+echo "║           Demo Recorder MCP Installer v0.2.0              ║"
+echo "║      MCP Server for Professional Demo Recording           ║"
 echo "╚═══════════════════════════════════════════════════════════╝"
 echo ""
 
@@ -146,8 +146,7 @@ check_window_tools() {
             if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
                 warn "Missing window management tools: ${MISSING_TOOLS[*]}"
                 echo ""
-                echo "These tools are needed for window-based recording (capture_mode='window')."
-                echo "Without them, you can still use full-screen recording with focus_window()."
+                echo "These tools are needed for window-based recording."
                 echo ""
                 
                 read -p "Would you like to install them now? (y/n) " -n 1 -r
@@ -166,23 +165,16 @@ check_window_tools() {
                     else
                         warn "Could not detect package manager. Please install manually:"
                         echo "  wmctrl xdotool"
-                        echo ""
-                        echo "Installation commands for common distros:"
-                        echo "  Ubuntu/Debian: sudo apt install wmctrl xdotool"
-                        echo "  Fedora/RHEL:   sudo dnf install wmctrl xdotool"
-                        echo "  Arch:          sudo pacman -S wmctrl xdotool"
-                        echo "  openSUSE:      sudo zypper install wmctrl xdotool"
                     fi
                     
                     # Verify installation
                     if command -v wmctrl &> /dev/null && command -v xdotool &> /dev/null; then
                         success "Window management tools installed successfully"
                     else
-                        warn "Some tools may not have installed correctly. Window-based recording may not work."
+                        warn "Some tools may not have installed correctly."
                     fi
                 else
                     warn "Skipping window tools installation."
-                    info "You can still use capture_mode='screen' with focus_window() for recording."
                 fi
             else
                 success "Linux: wmctrl and xdotool are available"
@@ -218,16 +210,16 @@ install_package() {
     pip install --upgrade pip -q
     
     # Install package
-    info "Installing getademo with all dependencies..."
+    info "Installing demo-recorder-mcp with all dependencies..."
     pip install -e "$SCRIPT_DIR[all]" -q
     
-    success "getademo installed successfully"
+    success "demo-recorder-mcp installed successfully"
     
     # Verify installation
-    if command -v getademo &> /dev/null; then
-        success "getademo command is available"
+    if [ -f "$VENV_DIR/bin/recorder" ]; then
+        success "recorder command is available"
     else
-        warn "getademo command not found in PATH, but package is installed"
+        warn "recorder command not found, but package may still be installed"
     fi
 }
 
@@ -252,7 +244,11 @@ configure_cursor() {
     esac
     
     MCP_CONFIG="$CURSOR_CONFIG_DIR/mcp.json"
-    GETADEMO_CMD="$VENV_DIR/bin/getademo"
+    RECORDER_CMD="$VENV_DIR/bin/recorder"
+    RECORDINGS_DIR="$HOME/recordings"
+    
+    # Create recordings directory
+    mkdir -p "$RECORDINGS_DIR"
     
     # Check if Cursor config directory exists
     if [ ! -d "$CURSOR_CONFIG_DIR" ]; then
@@ -263,10 +259,11 @@ configure_cursor() {
         echo ""
         echo '{'
         echo '  "mcpServers": {'
-        echo '    "getademo": {'
-        echo "      \"command\": \"$GETADEMO_CMD\","
+        echo '    "demo-recorder-local": {'
+        echo "      \"command\": \"$RECORDER_CMD\","
         echo '      "env": {'
-        echo '        "OPENAI_API_KEY": "your-api-key-here"'
+        echo '        "OPENAI_API_KEY": "your-api-key-here",'
+        echo "        \"RECORDINGS_DIR\": \"$RECORDINGS_DIR\""
         echo '      }'
         echo '    }'
         echo '  }'
@@ -279,9 +276,9 @@ configure_cursor() {
     
     # Check if mcp.json exists
     if [ -f "$MCP_CONFIG" ]; then
-        # Check if getademo is already configured
-        if grep -q '"getademo"' "$MCP_CONFIG" 2>/dev/null; then
-            info "getademo is already configured in Cursor"
+        # Check if demo-recorder is already configured
+        if grep -q '"demo-recorder-local"' "$MCP_CONFIG" 2>/dev/null; then
+            info "demo-recorder-local is already configured in Cursor"
             read -p "Would you like to update the configuration? (y/n) " -n 1 -r
             echo ""
             if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -303,8 +300,9 @@ configure_cursor() {
     read -p "Enter your OpenAI API key (or press Enter to skip): " OPENAI_KEY
     
     if [ -z "$OPENAI_KEY" ]; then
-        OPENAI_KEY="your-api-key-here"
-        warn "No API key provided. You can add it later to $MCP_CONFIG"
+        OPENAI_KEY=""
+        warn "No API key provided. Edge TTS will be used (free)."
+        warn "You can add your API key later to $MCP_CONFIG"
     fi
     
     # Create or update mcp.json
@@ -315,8 +313,9 @@ import json
 import os
 
 config_path = "$MCP_CONFIG"
-getademo_cmd = "$GETADEMO_CMD"
+recorder_cmd = "$RECORDER_CMD"
 openai_key = "$OPENAI_KEY"
+recordings_dir = "$RECORDINGS_DIR"
 
 # Read existing config
 with open(config_path, 'r') as f:
@@ -326,12 +325,14 @@ with open(config_path, 'r') as f:
 if 'mcpServers' not in config:
     config['mcpServers'] = {}
 
-# Add/update getademo
-config['mcpServers']['getademo'] = {
-    "command": getademo_cmd,
-    "env": {
-        "OPENAI_API_KEY": openai_key
-    }
+# Add/update demo-recorder-local
+env_config = {"RECORDINGS_DIR": recordings_dir}
+if openai_key:
+    env_config["OPENAI_API_KEY"] = openai_key
+
+config['mcpServers']['demo-recorder-local'] = {
+    "command": recorder_cmd,
+    "env": env_config
 }
 
 # Write updated config
@@ -342,18 +343,34 @@ print("Configuration updated successfully")
 EOF
     else
         # Create new config
-        cat > "$MCP_CONFIG" << EOF
+        if [ -n "$OPENAI_KEY" ]; then
+            cat > "$MCP_CONFIG" << EOF
 {
   "mcpServers": {
-    "getademo": {
-      "command": "$GETADEMO_CMD",
+    "demo-recorder-local": {
+      "command": "$RECORDER_CMD",
       "env": {
-        "OPENAI_API_KEY": "$OPENAI_KEY"
+        "OPENAI_API_KEY": "$OPENAI_KEY",
+        "RECORDINGS_DIR": "$RECORDINGS_DIR"
       }
     }
   }
 }
 EOF
+        else
+            cat > "$MCP_CONFIG" << EOF
+{
+  "mcpServers": {
+    "demo-recorder-local": {
+      "command": "$RECORDER_CMD",
+      "env": {
+        "RECORDINGS_DIR": "$RECORDINGS_DIR"
+      }
+    }
+  }
+}
+EOF
+        fi
     fi
     
     success "Cursor MCP configured at $MCP_CONFIG"
@@ -370,7 +387,7 @@ check_screen_permission() {
     echo ""
     echo "On macOS, you need to grant screen recording permission:"
     echo ""
-    echo "  1. Open System Settings → Privacy & Security → Screen Recording"
+    echo "  1. Open System Settings -> Privacy & Security -> Screen Recording"
     echo "  2. Click the '+' button"
     echo "  3. Add 'Cursor' (or your terminal app)"
     echo "  4. Restart Cursor after granting permission"
@@ -385,7 +402,7 @@ print_summary() {
     echo "║              Installation Complete!                       ║"
     echo "╚═══════════════════════════════════════════════════════════╝"
     echo ""
-    success "getademo has been installed and configured!"
+    success "demo-recorder-mcp has been installed and configured!"
     echo ""
     echo "Next steps:"
     echo "  1. Restart Cursor to load the MCP server"
@@ -394,15 +411,20 @@ print_summary() {
     echo "Configuration:"
     echo "  - Package: $SCRIPT_DIR"
     echo "  - Virtual env: $VENV_DIR"
+    echo "  - Recordings: $HOME/recordings"
     echo "  - Cursor config: $CURSOR_CONFIG_DIR/mcp.json"
     echo ""
     echo "Available tools:"
-    echo "  - start_recording / stop_recording (screen, window, or region mode)"
-    echo "  - list_windows / focus_window / get_window_bounds"
-    echo "  - text_to_speech (OpenAI or Edge TTS)"
-    echo "  - adjust_video_to_audio_length"
-    echo "  - concatenate_videos"
-    echo "  - get_demo_protocol"
+    echo "  Recording:"
+    echo "    - start_recording / stop_recording / recording_status"
+    echo "  Audio:"
+    echo "    - text_to_speech (OpenAI or Edge TTS)"
+    echo "  Video Editing:"
+    echo "    - adjust_video_to_audio / concatenate_videos / media_info"
+    echo "  Protocol Guides:"
+    echo "    - planning_phase_1 / setup_phase_2 / recording_phase_3 / editing_phase_4"
+    echo "  Utility:"
+    echo "    - list_windows / window_tools"
     echo ""
     echo "Documentation: https://github.com/Schimuneck/demo-recorder-mcp"
     echo ""
@@ -422,5 +444,3 @@ main() {
 
 # Run installer
 main
-
-

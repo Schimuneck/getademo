@@ -4,26 +4,36 @@ An MCP (Model Context Protocol) server that enables AI agents to create professi
 
 ## Features
 
-- **Screen Recording** - Auto-detects browser window in container, captures at 30fps
+- **Screen Recording** - Capture browser windows at 30fps
 - **Text-to-Speech** - Generate voiceover using OpenAI TTS (with API key) or Edge TTS (free)
 - **Audio-Video Sync** - Adjust video speed to match narration length (preserves all content)
 - **Scene-Based Workflow** - Built-in guides enforce short, manageable recordings
-- **Container-First** - Includes Playwright browser + virtual display for headless operation
+- **Multiple Modes** - Container (recommended), HTTP/SSE, or native host mode
 
-## Quick Start (Container)
+## Three Access Modes
+
+| Mode | Transport | Browser | Use Case |
+|------|-----------|---------|----------|
+| **Container STDIO** | STDIO | Playwright (included) | **Recommended** - Self-contained, all 36 tools |
+| **Container HTTP** | HTTP/SSE | Playwright (included) | OpenAI Responses API, remote access |
+| **Host** | STDIO | cursor-browser-extension | Native browser, macOS screen capture |
+
+## Quick Start
+
+### Option 1: Container STDIO Mode (Recommended)
+
+This is the **preferred way** to run demo-recorder-mcp. It includes Playwright browser automation and works fully self-contained with all 36 tools (14 demo-recorder + 22 Playwright).
 
 ```bash
-# Build the container
+# Clone and build
 git clone https://github.com/Schimuneck/demo-recorder-mcp.git
 cd demo-recorder-mcp
-podman build -t demo-recorder-mcp .
-
-# Or use docker
-docker build -t demo-recorder-mcp .
+podman build -t demo-recorder-mcp .  # or: docker build -t demo-recorder-mcp .
 ```
 
 Add to Cursor MCP settings (`~/.cursor/mcp.json`):
 
+**For Podman (macOS/Linux):**
 ```json
 {
   "mcpServers": {
@@ -32,39 +42,136 @@ Add to Cursor MCP settings (`~/.cursor/mcp.json`):
       "args": [
         "run", "-i", "--rm",
         "-v", "/path/to/recordings:/app/recordings",
-        "-e", "OPENAI_API_KEY=sk-your-api-key-here",
-        "demo-recorder-mcp"
+        "-e", "OPENAI_API_KEY=sk-your-key",
+        "demo-recorder-mcp",
+        "/app/run-mcp.sh", "multi-stdio"
       ]
     }
   }
 }
 ```
 
-## How It Works
+**For Docker:**
+```json
+{
+  "mcpServers": {
+    "demo-recorder": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "--add-host=host.docker.internal:host-gateway",
+        "-v", "/path/to/recordings:/app/recordings",
+        "-e", "OPENAI_API_KEY=sk-your-key",
+        "demo-recorder-mcp",
+        "/app/run-mcp.sh", "multi-stdio"
+      ]
+    }
+  }
+}
+```
+
+> **Note:** To access local dev servers from the container, see [Accessing Host Services](#accessing-host-services-from-container).
+
+### Option 2: Container HTTP/SSE Mode
+
+For OpenAI Responses API or remote access:
+
+```bash
+# Build HTTP image
+podman build -f Dockerfile.http -t demo-recorder-mcp:http .
+
+# Start container with HTTP server
+podman run -d --name demo-recorder \
+  -p 8081:8081 -p 8080:8080 \
+  -v ./recordings:/app/recordings \
+  -e OPENAI_API_KEY=sk-your-key \
+  demo-recorder-mcp:http
+```
+
+Add to Cursor MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "demo-recorder": {
+      "url": "http://localhost:8081/mcp/",
+      "transport": "streamable-http"
+    }
+  }
+}
+```
+
+### Option 3: Host Mode (Native)
+
+```bash
+# Clone and run installer (recommended)
+git clone https://github.com/Schimuneck/demo-recorder-mcp.git
+cd demo-recorder-mcp
+./install.sh
+```
+
+The installer will:
+- Check/install ffmpeg
+- Check/install window tools (Linux only)
+- Create virtual environment and install package
+- Configure Cursor MCP automatically
+- Remind about screen recording permission (macOS)
+
+**Manual installation** (if you prefer):
+```bash
+git clone https://github.com/Schimuneck/demo-recorder-mcp.git
+cd demo-recorder-mcp
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[all]"
+```
+
+Add to Cursor MCP settings:
+
+```json
+{
+  "mcpServers": {
+    "demo-recorder-local": {
+      "command": "/path/to/demo-recorder-mcp/.venv/bin/recorder",
+      "env": {
+        "OPENAI_API_KEY": "sk-your-key",
+        "RECORDINGS_DIR": "/path/to/recordings"
+      }
+    }
+  }
+}
+```
+
+Host mode uses **cursor-browser-extension** for browser automation - the demo-recorder captures the visible browser window.
+
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                   Container (Recommended)                    │
-│  ┌───────────────┐  ┌───────────────┐  ┌─────────────────┐  │
-│  │    Xvfb       │  │   Playwright  │  │  Demo Recorder  │  │
-│  │  DISPLAY=:99  │◄─│    Browser    │  │      MCP        │  │
-│  │  2560x1440    │  │   (Firefox)   │  │    (FFmpeg)     │  │
-│  └───────────────┘  └───────────────┘  └─────────────────┘  │
-│         │                                      │             │
-│         └──────────► Screen Capture ◄──────────┘             │
-└─────────────────────────────────────────────────────────────┘
-```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Container Mode                            │
+│  ┌───────────────┐  ┌───────────────┐  ┌─────────────────────┐  │
+│  │    Xvfb       │  │   Playwright  │  │   Demo Recorder     │  │
+│  │  DISPLAY=:99  │◄─│    Browser    │  │   MCP (FFmpeg)      │  │
+│  │  2560x1440    │  │   (Firefox)   │  │                     │  │
+│  └───────────────┘  └───────────────┘  └─────────────────────┘  │
+│         │                                        │               │
+│         └──────────► x11grab capture ◄───────────┘               │
+└─────────────────────────────────────────────────────────────────┘
 
-The container:
-1. Starts **Xvfb** with a virtual display
-2. Runs **Playwright MCP** (browser renders to virtual display)
-3. Runs **Demo Recorder MCP** (FFmpeg captures from virtual display)
-4. Both MCPs multiplex through a single connection
+┌─────────────────────────────────────────────────────────────────┐
+│                          Host Mode                               │
+│  ┌───────────────────────┐      ┌─────────────────────────────┐ │
+│  │  cursor-browser-ext   │      │      Demo Recorder          │ │
+│  │  (opens real browser) │◄────▶│      MCP (FFmpeg)           │ │
+│  │                       │      │   AVFoundation/gdigrab      │ │
+│  └───────────────────────┘      └─────────────────────────────┘ │
+│                                          │                       │
+│                  native screen capture ◄─┘                       │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ## Available Tools
 
 ### Recording Tools
-
 | Tool | Description |
 |------|-------------|
 | `start_recording` | Start video recording (auto-detects browser window) |
@@ -72,51 +179,83 @@ The container:
 | `recording_status` | Check if recording is in progress |
 
 ### Audio Tools
-
 | Tool | Description |
 |------|-------------|
-| `text_to_speech` | Generate voiceover audio (uses OpenAI if API key set, else Edge TTS) |
+| `text_to_speech` | Generate voiceover (OpenAI TTS with API key, else Edge TTS) |
 
 ### Video Editing Tools
-
 | Tool | Description |
 |------|-------------|
 | `adjust_video_to_audio` | Sync video duration to audio by adjusting playback speed |
 | `concatenate_videos` | Join multiple scene videos into final demo |
-| `media_info` | Get duration, resolution, and codec info for any media file |
+| `media_info` | Get duration, resolution, codec info for media files |
+| `list_media_files` | List all recordings with URLs (container mode) |
 
 ### Protocol Guides
-
 | Tool | Description |
 |------|-------------|
-| `planning_phase_1` | Demo planning guide - call FIRST before any demo |
-| `setup_phase_2` | Browser setup guide - sizing and window verification |
-| `recording_phase_3` | Recording actions guide - pacing and interaction patterns |
-| `editing_phase_4` | Post-recording guide - audio sync and final assembly |
+| `planning_phase_1` | Demo planning guide - call FIRST |
+| `setup_phase_2` | Browser setup guide |
+| `recording_phase_3` | Recording actions guide |
+| `editing_phase_4` | Post-recording assembly guide |
 
 ### Utility Tools
-
 | Tool | Description |
 |------|-------------|
-| `list_windows` | List visible windows (call after browser_navigate) |
-| `window_tools` | Check availability of window management tools |
+| `list_windows` | List visible windows |
+| `window_tools` | Check window management tool availability |
+
+**Container mode** also includes all 22 **Playwright browser tools** (`browser_navigate`, `browser_click`, `browser_snapshot`, etc.) through the proxy multiplexer.
+
+## Project Structure
+
+```
+demo-recorder-mcp/
+├── src/recorder/
+│   ├── server.py           # Entry point (~40 lines)
+│   ├── core/               # Shared types and config
+│   │   ├── types.py        # WindowBounds, RecordingState, etc.
+│   │   └── config.py       # Environment detection, paths
+│   ├── backends/           # Recording implementations
+│   │   ├── base.py         # Abstract RecordingBackend interface
+│   │   ├── container.py    # x11grab + Xvfb
+│   │   └── host.py         # AVFoundation (macOS), gdigrab (Win)
+│   ├── tools/              # MCP tool definitions
+│   │   ├── recording.py    # start/stop_recording
+│   │   ├── tts.py          # text_to_speech
+│   │   ├── video.py        # concatenate, adjust, media_info
+│   │   ├── guides.py       # Protocol phase guides
+│   │   └── windows.py      # list_windows, window_tools
+│   ├── transports/         # HTTP/SSE server and multiplexer
+│   │   ├── http.py
+│   │   └── multiplexer.py
+│   └── utils/              # Shared utilities
+│       ├── ffmpeg.py       # FFmpeg helpers
+│       ├── window_manager.py  # Cross-platform window detection
+│       └── protocol.py     # Recording workflow guides
+├── scripts/                # Container startup scripts
+├── tests/                  # Test suite
+├── Dockerfile              # STDIO container
+├── Dockerfile.http         # HTTP/SSE container
+└── pyproject.toml
+```
 
 ## Scene-Based Workflow
 
-Demos are recorded as **short scenes (10-30 seconds each)**, not one long video. This enables precise audio-video synchronization.
+Demos are recorded as **short scenes (10-30 seconds each)**, not one long video.
 
 ### Per-Scene Process
 
 ```
 SCENE N:
-1. browser_snapshot()                    # Verify starting position
-2. start_recording()                     # START recording
-3. browser_wait_for(time=2)              # Viewer sees initial state
-4. [ACTION: scroll, click, or type]      # Captured on video!
-5. browser_wait_for(time=2)              # Viewer sees result
-6. stop_recording()                      # STOP recording
-7. text_to_speech("Narration...")        # Generate audio
-8. adjust_video_to_audio(...)            # Sync video to audio
+1. browser_snapshot()            # Verify starting position
+2. start_recording()             # START recording
+3. browser_wait_for(time=2)      # Viewer sees initial state
+4. [scroll, click, or type]      # ACTION captured on video!
+5. browser_wait_for(time=2)      # Viewer sees result
+6. stop_recording()              # STOP recording
+7. text_to_speech("...")         # Generate audio
+8. adjust_video_to_audio(...)    # Sync video to audio
 9. [Repeat for next scene]
 ```
 
@@ -124,9 +263,9 @@ SCENE N:
 
 **WRONG** (static video):
 ```python
-browser_scroll(400)           # Action NOT recorded
+browser_scroll(400)           # NOT recorded
 start_recording()
-browser_wait_for(time=5)      # Records static page
+browser_wait_for(time=5)      # Static page
 stop_recording()
 ```
 
@@ -134,7 +273,7 @@ stop_recording()
 ```python
 start_recording()
 browser_wait_for(time=2)
-browser_scroll(400)           # Action CAPTURED!
+browser_scroll(400)           # CAPTURED!
 browser_wait_for(time=2)
 stop_recording()
 ```
@@ -146,64 +285,44 @@ stop_recording()
 browser_navigate(url="https://example.com")
 browser_resize(width=1920, height=1080)
 
-# === SCENE 1: Homepage Overview ===
-browser_snapshot()                              # Verify position
-
-start_recording(output_path="scene1_raw.mp4")   # Start recording
-browser_wait_for(time=2)                        # Initial pause
-browser_scroll(direction="down", amount=400)    # ACTION CAPTURED
-browser_wait_for(time=2)                        # End pause
-stop_recording()                                # Stop recording
-
-text_to_speech(
-    text="Welcome to our platform. As we scroll down, you can see the key features.",
-    output_path="scene1_audio.mp3"
-)
-
-adjust_video_to_audio(
-    video_path="scene1_raw.mp4",
-    audio_path="scene1_audio.mp3",
-    output_path="scene1_final.mp4"
-)
-
-# === SCENE 2: Click Feature ===
+# === SCENE 1: Homepage ===
 browser_snapshot()
-
-start_recording(output_path="scene2_raw.mp4")
+start_recording(filename="scene1_raw.mp4")
 browser_wait_for(time=2)
-browser_click(ref="...", element="Learn More")  # ACTION CAPTURED
-browser_wait_for(time=3)
+browser_scroll(direction="down", amount=400)
+browser_wait_for(time=2)
 stop_recording()
 
 text_to_speech(
-    text="Clicking Learn More opens the detailed documentation.",
-    output_path="scene2_audio.mp3"
+    text="Welcome. As we scroll down, see the key features.",
+    filename="scene1_audio.mp3"
 )
 
 adjust_video_to_audio(
-    video_path="scene2_raw.mp4",
-    audio_path="scene2_audio.mp3",
-    output_path="scene2_final.mp4"
+    video_filename="scene1_raw.mp4",
+    audio_filename="scene1_audio.mp3",
+    output_filename="scene1_final.mp4"
 )
 
-# === FINAL: Concatenate All Scenes ===
+# === FINAL ===
 concatenate_videos(
-    video_paths=["scene1_final.mp4", "scene2_final.mp4"],
-    output_path="demo_final.mp4"
+    filenames=["scene1_final.mp4", "scene2_final.mp4"],
+    output_filename="demo_final.mp4"
 )
 
-media_info(file_path="demo_final.mp4")  # Verify final output
+media_info(filename="demo_final.mp4")
 ```
 
-## Key Principle: Speed Adjust, Never Cut
+## Configuration
 
-When syncing video with audio, the tool uses **speed adjustment**:
+### Environment Variables
 
-- Video longer than audio → **Speeds up** (faster playback)
-- Video shorter than audio → **Slows down** (slower playback)
-- **ALL visual content is preserved** - no frames are ever cut
-
-Keep scenes short (10-30s) for natural speed adjustments. A 20s video synced to 25s audio plays at comfortable 0.8x speed. A 90s video synced to 45s audio plays at unwatchable 2x speed.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENAI_API_KEY` | (none) | OpenAI API key for TTS |
+| `RECORDINGS_DIR` | `~/recordings` (host), `/app/recordings` (container) | Output directory |
+| `VIDEO_SERVER_PORT` | `8080` | Video HTTP server port (container) |
+| `VIDEO_SERVER_HOST` | `localhost` | Video server hostname |
 
 ## Text-to-Speech
 
@@ -211,128 +330,116 @@ The `text_to_speech` tool automatically selects the best available engine:
 
 | Engine | When Used | Voice |
 |--------|-----------|-------|
-| OpenAI TTS | When `OPENAI_API_KEY` is set | "onyx" (deep, authoritative) |
-| Edge TTS | Fallback (free, no API key) | "en-US-AriaNeural" |
+| OpenAI TTS | When `OPENAI_API_KEY` set | "onyx" (professional) |
+| Edge TTS | Fallback (free) | "en-US-GuyNeural" |
 
-No configuration needed - just call:
+## Accessing Host Services from Container
+
+When running in container mode, you may want to record demos for local development servers (e.g., `localhost:3000`). By default, `localhost` inside a container refers to the container itself, not your host machine.
+
+### Podman (macOS/Linux)
+
+Podman automatically provides `host.containers.internal` which resolves to your host machine:
+
 ```python
-text_to_speech(text="Your narration here", output_path="audio.mp3")
+# Navigate to your local dev server
+browser_navigate(url="http://host.containers.internal:3000")
 ```
 
-## Installation Options
+**No extra flags needed** - this works out of the box with Podman.
 
-### Option 1: Container (Recommended)
+**Important:** Your dev server must allow connections from this hostname. For Vite, add to `vite.config.ts`:
 
-See Quick Start above. Benefits:
-- Headless recording works without physical display
-- Playwright browser automation included
-- Cross-platform (macOS, Linux, Windows)
-- No system dependencies to install
-
-### Option 2: From PyPI (Host Mode)
-
-```bash
-pip install "demo-recorder-mcp[all]"
+```typescript
+export default defineConfig({
+  server: {
+    host: true,
+    allowedHosts: ['host.containers.internal'],
+  },
+})
 ```
 
-Requires ffmpeg:
-```bash
-# macOS
-brew install ffmpeg
+### Docker
 
-# Ubuntu/Debian  
-sudo apt install ffmpeg
-
-# Windows (Chocolatey)
-choco install ffmpeg
-```
-
-### Option 3: From Source
-
-```bash
-git clone https://github.com/Schimuneck/demo-recorder-mcp.git
-cd demo-recorder-mcp
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[all]"
-```
-
-## Cursor MCP Configuration
-
-### Container (Recommended)
+Docker requires the `--add-host` flag to enable host access:
 
 ```json
-{
-  "mcpServers": {
-    "demo-recorder": {
-      "command": "podman",
-      "args": [
-        "run", "-i", "--rm",
-        "-v", "/path/to/recordings:/app/recordings",
-        "-e", "OPENAI_API_KEY=sk-your-api-key-here",
-        "demo-recorder-mcp"
-      ]
-    }
-  }
-}
+"args": [
+    "run", "-i", "--rm",
+    "--add-host=host.docker.internal:host-gateway",
+    "-v", "/path/to/recordings:/app/recordings",
+    "-e", "OPENAI_API_KEY=sk-your-key",
+    "demo-recorder-mcp",
+    "/app/run-mcp.sh", "multi-stdio"
+]
 ```
 
-### Host Mode (Python Package)
+Then navigate using:
 
-```json
-{
-  "mcpServers": {
-    "demo-recorder": {
-      "command": "demo-recorder-mcp",
-      "env": {
-        "OPENAI_API_KEY": "sk-your-api-key-here"
-      }
-    }
-  }
-}
+```python
+browser_navigate(url="http://host.docker.internal:3000")
 ```
+
+**Important:** Your dev server must allow connections from this hostname. For Vite, add to `vite.config.ts`:
+
+```typescript
+export default defineConfig({
+  server: {
+    host: true,
+    allowedHosts: ['host.docker.internal'],
+  },
+})
+```
+
+### Summary Table
+
+| Runtime | Hostname | Extra Flags Needed |
+|---------|----------|-------------------|
+| Podman | `host.containers.internal` | None |
+| Docker | `host.docker.internal` | `--add-host=host.docker.internal:host-gateway` |
 
 ## Troubleshooting
-
-### Container: Black Screen Recording
-
-1. Ensure browser is navigated first: `browser_navigate(url="...")`
-2. The recording auto-detects the browser window
-3. Check recording status: `recording_status()`
 
 ### Container: No Windows Found
 
 `list_windows()` requires a browser window to exist:
 ```python
-# WRONG: list_windows before browser exists
-list_windows()  # Returns empty
-
-# CORRECT: navigate first, then list
-browser_navigate(url="https://example.com")
-list_windows()  # Returns Firefox window
+browser_navigate(url="https://example.com")  # First!
+list_windows()  # Now returns Firefox window
 ```
 
 ### Host Mode: Screen Recording Permission (macOS)
 
-1. Go to **System Settings → Privacy & Security → Screen Recording**
-2. Add **Cursor** (or terminal app) to allowed list
+1. **System Settings → Privacy & Security → Screen Recording**
+2. Add **Cursor** to allowed list
 3. Restart Cursor
 
-### Video Out of Sync with Audio
+### Video Out of Sync
 
-Break demos into shorter scenes (10-30 seconds each). Long recordings require extreme speed adjustments that look unnatural.
+Break demos into shorter scenes (10-30 seconds). Long recordings need extreme speed adjustments.
 
-## File Organization
+### Container HTTP: Health Check
 
+```bash
+curl http://localhost:8081/health
+# {"status":"healthy","service":"demo-recorder-mcp","tools_count":36}
 ```
-/app/recordings/
-├── scene1_raw.mp4
-├── scene1_audio.mp3
-├── scene1_final.mp4
-├── scene2_raw.mp4
-├── scene2_audio.mp3
-├── scene2_final.mp4
-└── demo_final.mp4
+
+## Development
+
+```bash
+# Setup
+git clone https://github.com/Schimuneck/demo-recorder-mcp.git
+cd demo-recorder-mcp
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+# Run tests
+pytest tests/ -v
+
+# Build container
+podman build -t demo-recorder-mcp .
+podman build -f Dockerfile.http -t demo-recorder-mcp:http .
 ```
 
 ## Contributing
