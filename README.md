@@ -8,30 +8,115 @@ An MCP (Model Context Protocol) server that enables AI agents to create professi
 - **Text-to-Speech** - Generate voiceover using OpenAI TTS (with API key) or Edge TTS (free)
 - **Audio-Video Sync** - Adjust video speed to match narration length (preserves all content)
 - **Scene-Based Workflow** - Built-in guides enforce short, manageable recordings
-- **Multiple Modes** - Container (recommended), HTTP/SSE, or native host mode
+- **Multiple Modes** - Host (recommended for quality), Container (self-contained)
 
-## Three Access Modes
+## Two Access Modes
 
-| Mode | Transport | Browser Automation | Use Case |
-|------|-----------|-------------------|----------|
-| **Container STDIO** | STDIO | Playwright (included) | **Recommended** - Self-contained, all 36 tools |
-| **Container HTTP** | HTTP/SSE | Playwright (included) | OpenAI Responses API, remote access |
-| **Host** | STDIO | Playwright MCP (recommended) or cursor-browser-extension | Native browser, macOS screen capture, `maximize_window` tool |
+| Mode | Best For | Browser Automation | Quality |
+|------|----------|-------------------|---------|
+| **Host Mode** | Production demos, native screen quality | Playwright MCP (separate) | **Best** - Native resolution |
+| **Container Mode** | Quick setup, CI/CD, reproducible builds | Playwright (included) | Good - Virtual display |
 
-## Quick Start
+---
 
-### Option 1: Container STDIO Mode (Recommended)
+## Quick Start: Host Mode (Recommended)
 
-This is the **preferred way** to run demo-recorder-mcp. It includes Playwright browser automation and works fully self-contained with all 36 tools (14 demo-recorder + 22 Playwright).
+Host mode provides the **best video quality** by capturing your native screen. This is the recommended setup for creating professional demos.
+
+### Prerequisites
+
+- **Python 3.10+** - For demo-recorder-mcp
+- **Node.js 18+** - For Playwright MCP (`npx` command)
+- **FFmpeg** - For video processing (`brew install ffmpeg` on macOS)
+- **Chrome** - Recommended browser for Playwright
+
+### Step 1: Install Demo Recorder
 
 ```bash
-# Clone and build
+git clone https://github.com/Schimuneck/demo-recorder-mcp.git
+cd demo-recorder-mcp
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[all]"
+```
+
+### Step 2: Configure Cursor MCP
+
+Add to `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest",
+        "--browser=chrome",
+        "--isolated"
+      ]
+    },
+    "demo-recorder-local": {
+      "command": "/path/to/demo-recorder-mcp/.venv/bin/recorder",
+      "env": {
+        "OPENAI_API_KEY": "sk-your-openai-key",
+        "RECORDINGS_DIR": "${workspaceFolder}/recordings"
+      }
+    }
+  }
+}
+```
+
+> **Important:** Replace `/path/to/demo-recorder-mcp` with your actual installation path.
+
+### Step 3: Disable Cursor Browser Automation (Critical!)
+
+⚠️ **This step is required** to avoid viewport overflow and window detection issues.
+
+1. Open Cursor Settings (`Cmd+,` on macOS, `Ctrl+,` on Windows/Linux)
+2. Search for "Browser" or navigate to **Tools & MCP**
+3. Find **"Browser Automation"** and **turn it OFF**
+
+![Disable Browser Automation](docs/disable-browser-automation.png)
+
+**Why?** Cursor's built-in browser automation uses an embedded browser window that:
+- Has viewport size issues (larger than screen)
+- Is difficult for the recorder to identify and capture
+- Conflicts with Playwright MCP
+
+### Step 4: macOS Screen Recording Permission
+
+On macOS, you must grant screen recording permission:
+
+1. Go to **System Settings → Privacy & Security → Screen Recording**
+2. Add **Cursor** to the allowed list
+3. **Restart Cursor** after granting permission
+
+### Step 5: Verify Setup
+
+After restarting Cursor, test the setup:
+
+1. Ask Cursor: *"List available windows"* → Should work without errors
+2. Ask Cursor: *"Navigate to https://example.com"* → Chrome should open
+3. Ask Cursor: *"Take a browser snapshot"* → Should show page structure
+
+You're ready to create demos!
+
+---
+
+## Quick Start: Container Mode
+
+Container mode is self-contained with all 36 tools (14 demo-recorder + 22 Playwright). Best for CI/CD or when you want a reproducible environment.
+
+### Build the Container
+
+```bash
 git clone https://github.com/Schimuneck/demo-recorder-mcp.git
 cd demo-recorder-mcp
 podman build -t demo-recorder-mcp .  # or: docker build -t demo-recorder-mcp .
 ```
 
-Add to Cursor MCP settings (`~/.cursor/mcp.json`):
+### Configure Cursor MCP
+
+Add to `~/.cursor/mcp.json`:
 
 **For Podman (macOS/Linux):**
 ```json
@@ -72,7 +157,7 @@ Add to Cursor MCP settings (`~/.cursor/mcp.json`):
 
 > **Note:** To access local dev servers from the container, see [Accessing Host Services](#accessing-host-services-from-container).
 
-### Option 2: Container HTTP/SSE Mode
+### Container HTTP/SSE Mode (Alternative)
 
 For OpenAI Responses API or remote access:
 
@@ -80,7 +165,7 @@ For OpenAI Responses API or remote access:
 # Build HTTP image
 podman build -f Dockerfile.http -t demo-recorder-mcp:http .
 
-# Start container with HTTP server
+# Start container
 podman run -d --name demo-recorder \
   -p 8081:8081 -p 8080:8080 \
   -v ./recordings:/app/recordings \
@@ -101,61 +186,9 @@ Add to Cursor MCP settings:
 }
 ```
 
-### Option 3: Host Mode (Native)
+---
 
-```bash
-# Clone and run installer (recommended)
-git clone https://github.com/Schimuneck/demo-recorder-mcp.git
-cd demo-recorder-mcp
-./install.sh
-```
-
-The installer will:
-- Check/install ffmpeg
-- Check/install window tools (Linux only)
-- Create virtual environment and install package
-- Configure Cursor MCP automatically
-- Remind about screen recording permission (macOS)
-
-**Manual installation** (if you prefer):
-```bash
-git clone https://github.com/Schimuneck/demo-recorder-mcp.git
-cd demo-recorder-mcp
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[all]"
-```
-
-> **Note:** Container mode is still the **overall recommended approach** as it's fully self-contained with all tools included. Use host mode when you need native screen capture or the `maximize_window` feature.
-
-#### If Using Host Mode: Pair with Playwright MCP
-
-For the best experience in host mode, we **strongly recommend** using demo-recorder-mcp alongside the **Playwright MCP server**. This gives you the same browser automation tools (`browser_navigate`, `browser_click`, `browser_snapshot`, etc.) that are included in container mode.
-
-**Important:** When using Playwright MCP, we recommend **disabling Cursor's built-in browser automation** to avoid conflicts. In Cursor settings, go to **Settings → Tools & MCPO → Browser Automation** and turn it off.
-
-Add both servers to your Cursor MCP settings (`~/.cursor/mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "demo-recorder-local": {
-      "command": "/path/to/demo-recorder-mcp/.venv/bin/recorder",
-      "env": {
-        "OPENAI_API_KEY": "sk-your-key",
-        "RECORDINGS_DIR": "/path/to/recordings"
-      }
-    },
-    "playwright": {
-      "command": "npx",
-      "args": ["@anthropic-ai/mcp-server-playwright"]
-    }
-  }
-}
-```
-
-> **Note:** Playwright MCP requires Node.js. Install with: `npm install -g @anthropic-ai/mcp-server-playwright`
-
-#### Host Mode Exclusive: `maximize_window` Tool
+## Host Mode Exclusive: `maximize_window` Tool
 
 Host mode includes the `maximize_window` tool (not available in container mode) that fills the screen for better quality recordings while keeping the window title stable:
 
@@ -235,7 +268,9 @@ start_recording(window_title="Google Chrome")
 
 **Container mode** also includes all 22 **Playwright browser tools** (`browser_navigate`, `browser_click`, `browser_snapshot`, etc.) through the proxy multiplexer.
 
-**Host mode** works best with Playwright MCP installed separately (see [Host Mode setup](#option-3-host-mode-native)).
+**Host mode** works best with Playwright MCP installed separately (see [Host Mode setup](#quick-start-host-mode-recommended)).
+
+> **Playwright MCP Flags:** Always use `--browser=chrome --isolated` for best compatibility with the recorder.
 
 ## Project Structure
 
@@ -468,6 +503,47 @@ export default defineConfig({
 
 ## Troubleshooting
 
+### Host Mode: Viewport Larger Than Screen
+
+**Symptom:** Browser viewport extends beyond screen boundaries, making recording impossible.
+
+**Cause:** Cursor's built-in Browser Automation conflicts with Playwright MCP.
+
+**Solution:**
+1. Disable Cursor Browser Automation (Settings → Tools & MCP → Browser Automation → OFF)
+2. Use Playwright MCP with `--browser=chrome --isolated` flags
+3. Restart Cursor
+
+### Host Mode: Window Not Found During Recording
+
+**Symptom:** `start_recording` fails with "Window not found" error.
+
+**Cause:** Window title changed (e.g., navigating between pages), or Cursor's embedded browser is being detected instead of Chrome.
+
+**Solutions:**
+1. Use the exact window title shown by `list_windows()`
+2. Ensure Cursor Browser Automation is disabled
+3. Check that Chrome (not Cursor) is the active browser window
+4. Use `maximize_window(window_title="Google Chrome")` before recording
+
+### Host Mode: Multiple Monitors / Retina Display Issues
+
+**Symptom:** Recording captures wrong screen or has resolution issues.
+
+**Solutions:**
+1. Move Chrome to your primary display before recording
+2. Use `maximize_window()` to ensure consistent window bounds
+3. For Retina displays, the recorder automatically handles scaling
+
+### Host Mode: Screen Recording Permission (macOS)
+
+**Symptom:** Recording fails silently or produces black video.
+
+**Solution:**
+1. **System Settings → Privacy & Security → Screen Recording**
+2. Add **Cursor** to allowed list
+3. **Restart Cursor** (required for permission to take effect)
+
 ### Container: No Windows Found
 
 `list_windows()` requires a browser window to exist:
@@ -475,12 +551,6 @@ export default defineConfig({
 browser_navigate(url="https://example.com")  # First!
 list_windows()  # Now returns Firefox window
 ```
-
-### Host Mode: Screen Recording Permission (macOS)
-
-1. **System Settings → Privacy & Security → Screen Recording**
-2. Add **Cursor** to allowed list
-3. Restart Cursor
 
 ### Video Out of Sync
 
@@ -492,6 +562,36 @@ Break demos into shorter scenes (10-30 seconds). Long recordings need extreme sp
 curl http://localhost:8081/health
 # {"status":"healthy","service":"demo-recorder-mcp","tools_count":36}
 ```
+
+### Orphaned FFmpeg Processes
+
+**Symptom:** New recordings fail or produce 0-byte files.
+
+**Cause:** Previous recording wasn't properly stopped, leaving FFmpeg running.
+
+**Solution:**
+```bash
+# Check for orphaned processes
+ps aux | grep ffmpeg
+
+# Kill if found
+pkill -9 ffmpeg
+```
+
+The recorder now automatically cleans up orphaned processes on startup.
+
+---
+
+## Common Mistakes to Avoid
+
+| ❌ Don't | ✅ Do Instead |
+|----------|---------------|
+| Use Cursor Browser Automation with Playwright MCP | Disable Cursor Browser Automation |
+| Use `@anthropic-ai/mcp-server-playwright` | Use `@playwright/mcp@latest --browser=chrome --isolated` |
+| Omit `--isolated` flag | Always include `--isolated` to avoid browser conflicts |
+| Record long 5+ minute scenes | Break into 10-30 second scenes, then concatenate |
+| Skip `maximize_window()` | Always maximize for consistent window bounds |
+| Use Cursor's embedded browser | Use standalone Chrome via Playwright MCP |
 
 ## Development
 
