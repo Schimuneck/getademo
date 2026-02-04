@@ -2,6 +2,21 @@
 
 An MCP (Model Context Protocol) server that enables AI agents to create professional demo videos with synchronized voiceover narration. Works with **any website or web application**.
 
+## Example: What You Can Create
+
+[![Kagenti + MLflow Demo](https://img.youtube.com/vi/ns8jh_38fRA/maxresdefault.jpg)](https://www.youtube.com/watch?v=ns8jh_38fRA)
+
+**[Watch the full demo on YouTube →](https://www.youtube.com/watch?v=ns8jh_38fRA)**
+
+This 7-minute demo was created entirely by an AI agent using this tool. It showcases deploying a custom agent with MLflow integration on Kagenti, including:
+- Navigating the UI and filling forms
+- Deploying a custom container image
+- Configuring environment variables and ports
+- Testing the deployed agent via chat
+- Exploring MLflow metrics and tracking
+
+---
+
 ## Features
 
 - **Screen Recording** - Capture browser windows at 30fps
@@ -71,16 +86,29 @@ Add to `~/.cursor/mcp.json`:
 
 ⚠️ **This step is required** to avoid viewport overflow and window detection issues.
 
-1. Open Cursor Settings (`Cmd+,` on macOS, `Ctrl+,` on Windows/Linux)
-2. Search for "Browser" or navigate to **Tools & MCP**
-3. Find **"Browser Automation"** and **turn it OFF**
+1. Open Cursor Settings:
+   - macOS: `Cmd + ,`
+   - Windows/Linux: `Ctrl + ,`
+2. In the left sidebar, click **"Tools"**
+3. Find the **"Browser"** section
+4. Set **"Browser Automation"** to **"Off"**
+5. Optionally, also disable **"Show Localhost Links in Browser"**
 
-![Disable Browser Automation](docs/disable-browser-automation.png)
+<p align="center">
+  <img src="docs/disable-browser-automation.png" alt="Disable Browser Automation in Cursor Settings" width="600">
+</p>
 
-**Why?** Cursor's built-in browser automation uses an embedded browser window that:
-- Has viewport size issues (larger than screen)
-- Is difficult for the recorder to identify and capture
-- Conflicts with Playwright MCP
+**Why is this necessary?** Cursor's built-in browser automation uses an embedded browser window that:
+- Has viewport size issues (viewport larger than screen, causing overflow)
+- Is difficult for the recorder to identify and capture correctly
+- Conflicts with Playwright MCP when both are enabled
+- Causes window title detection problems during recording
+
+By disabling it and using Playwright MCP instead, you get a standalone Chrome window that:
+- Has proper viewport sizing
+- Is easy to identify by window title ("Google Chrome")
+- Works reliably with the screen recorder
+- Supports the `--isolated` flag for clean browser sessions
 
 ### Step 4: macOS Screen Recording Permission
 
