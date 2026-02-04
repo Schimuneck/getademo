@@ -289,6 +289,17 @@ class RecordingBackend(ABC):
             except (ProcessLookupError, OSError):
                 pass
         
+        # Final verification: ensure process is truly dead
+        pid = process.pid
+        if pid and process.poll() is None:
+            # Process still running! Force kill by PID
+            import os
+            try:
+                os.kill(pid, signal.SIGKILL)
+                await asyncio.sleep(0.3)
+            except (ProcessLookupError, OSError):
+                pass
+        
         # Close log file and clean up
         log_path = None
         if self._state.log_file:

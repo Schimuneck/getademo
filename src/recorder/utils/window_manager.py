@@ -140,11 +140,11 @@ repeat with i from 1 to count of theWindows
     end try
     try
         set theBounds to theWindow's kCGWindowBounds
-        set bX to theBounds's X as integer
-        set bY to theBounds's Y as integer
-        set bW to theBounds's Width as integer
-        set bH to theBounds's Height as integer
-        set boundsStr to (bX as text) & "," & (bY as text) & "," & (bW as text) & "," & (bH as text)
+        set posX to theBounds's X as integer
+        set posY to theBounds's Y as integer
+        set winW to theBounds's Width as integer
+        set winH to theBounds's Height as integer
+        set boundsStr to (posX as text) & "," & (posY as text) & "," & (winW as text) & "," & (winH as text)
     end try
     
     -- Skip windows with no name and small size (likely UI elements)
@@ -218,11 +218,11 @@ try
                 set tabTitles to title of activeTab
             end try
             set winBounds to bounds of w
-            set bX to item 1 of winBounds
-            set bY to item 2 of winBounds
-            set bW to (item 3 of winBounds) - bX
-            set bH to (item 4 of winBounds) - bY
-            set output to output & i & "||" & "Google Chrome" & "||" & tabTitles & "||" & bX & "," & bY & "," & bW & "," & bH & linefeed
+            set posX to item 1 of winBounds
+            set posY to item 2 of winBounds
+            set winW to (item 3 of winBounds) - posX
+            set winH to (item 4 of winBounds) - posY
+            set output to output & i & "||" & "Google Chrome" & "||" & tabTitles & "||" & posX & "," & posY & "," & winW & "," & winH & linefeed
         end repeat
     end tell
 end try
@@ -613,6 +613,180 @@ end tell
         raise WindowManagerError(f"Failed to make window fullscreen: {e}")
 
 
+def _macos_maximize_window(title_pattern: str) -> bool:
+    """Maximize a window on macOS.
+    
+    Tries multiple methods in order:
+    1. Window > Zoom menu (native macOS zoom)
+    2. Direct bounds setting (reliable fallback)
+    
+    The Zoom menu is a toggle, so we verify the window is actually
+    maximized afterward and use the fallback if not.
+    """
+    pattern = re.compile(title_pattern, re.IGNORECASE)
+    
+    try:
+        windows = _macos_list_windows()
+    except WindowManagerError:
+        windows = []
+    
+    matching = None
+    for win in windows:
+        if pattern.search(win.title or '') or (win.app_name and pattern.search(win.app_name)):
+            matching = win
+            break
+    
+    if not matching:
+        raise WindowNotFoundError(f"No window matching '{title_pattern}'")
+    
+    escaped_app = matching.app_name.replace('"', '\\"') if matching.app_name else ""
+    
+    # Get initial window bounds for comparison
+    initial_bounds = matching.bounds
+    
+    # Method 1: Try Window > Zoom menu
+    script = f'''
+tell application "{escaped_app}"
+    activate
+end tell
+
+delay 0.3
+
+tell application "System Events"
+    tell process "{escaped_app}"
+        -- Click Window menu > Zoom
+        try
+            click menu item "Zoom" of menu "Window" of menu bar 1
+            return "ok"
+        on error
+            -- Some apps use different menu names
+            try
+                click menu item "Zoom Window" of menu "Window" of menu bar 1
+                return "ok"
+            end try
+        end try
+    end tell
+end tell
+
+return "error: Could not find Zoom menu item"
+'''
+    
+    zoom_success = False
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=10
+        )
+        if "ok" in result.stdout:
+            zoom_success = True
+    except Exception:
+        pass
+    
+    if zoom_success:
+        # Wait for zoom animation
+        import time
+        time.sleep(0.5)
+        
+        # Check if window was actually maximized by comparing bounds
+        # A maximized window should be near full screen width (> 90% of typical screen)
+        try:
+            new_windows = _macos_list_windows()
+            for win in new_windows:
+                if pattern.search(win.title or '') or (win.app_name and pattern.search(win.app_name)):
+                    if win.bounds and win.bounds.width >= 1500:  # Reasonably maximized
+                        return True
+                    break
+        except Exception:
+            pass
+        
+        # Zoom didn't maximize (might have un-zoomed), try again or use fallback
+        try:
+            # Try zoom again in case it toggled off
+            subprocess.run(
+                ["osascript", "-e", script],
+                capture_output=True, text=True, timeout=10
+            )
+            import time
+            time.sleep(0.3)
+            
+            # Check again
+            new_windows = _macos_list_windows()
+            for win in new_windows:
+                if pattern.search(win.title or '') or (win.app_name and pattern.search(win.app_name)):
+                    if win.bounds and win.bounds.width >= 1500:
+                        return True
+                    break
+        except Exception:
+            pass
+    
+    # Method 2: Fallback to direct bounds setting
+    return _macos_maximize_window_alt(title_pattern, escaped_app)
+
+
+def _macos_maximize_window_alt(title_pattern: str, escaped_app: str) -> bool:
+    """Alternative maximize by setting window bounds directly.
+    
+    This method gets the screen dimensions and sets the window bounds
+    to fill the visible screen area (accounting for menu bar and dock).
+    """
+    # First, get screen dimensions using Finder (reliable across all macOS versions)
+    screen_script = '''
+tell application "Finder"
+    set screenBounds to bounds of window of desktop
+    return (item 3 of screenBounds) & "," & (item 4 of screenBounds)
+end tell
+'''
+    
+    try:
+        screen_result = subprocess.run(
+            ["osascript", "-e", screen_script],
+            capture_output=True, text=True, timeout=5
+        )
+        
+        if screen_result.returncode == 0 and "," in screen_result.stdout:
+            parts = screen_result.stdout.strip().split(",")
+            screen_width = int(parts[0].strip())
+            screen_height = int(parts[1].strip())
+        else:
+            # Fallback to common resolution
+            screen_width = 1728
+            screen_height = 1117
+    except Exception:
+        # Fallback to common resolution
+        screen_width = 1728
+        screen_height = 1117
+    
+    # Menu bar is typically 25 pixels on macOS
+    menu_bar_height = 25
+    
+    # Set window bounds directly using the app's AppleScript interface
+    script = f'''
+tell application "{escaped_app}"
+    activate
+    delay 0.3
+    try
+        set bounds of front window to {{0, {menu_bar_height}, {screen_width}, {screen_height}}}
+        return "ok"
+    on error errMsg
+        return "error: " & errMsg
+    end try
+end tell
+'''
+    
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True, text=True, timeout=10
+        )
+        if "ok" in result.stdout:
+            return True
+        raise WindowManagerError(f"Failed to maximize: {result.stderr or result.stdout}")
+    except subprocess.TimeoutExpired:
+        raise WindowManagerError("Timeout maximizing window")
+    except Exception as e:
+        raise WindowManagerError(f"Failed to maximize window: {e}")
+
+
 # =============================================================================
 # Linux Backend
 # =============================================================================
@@ -747,6 +921,58 @@ def _linux_fullscreen_window(title_pattern: str) -> bool:
         raise WindowManagerError(f"Failed to make window fullscreen: {e}")
 
 
+def _linux_maximize_window(title_pattern: str) -> bool:
+    """Maximize a window on Linux using wmctrl.
+    
+    Uses the window manager's maximize feature (maximized_vert + maximized_horz)
+    which keeps the window in the same workspace with title bar visible.
+    This is equivalent to clicking the maximize button.
+    """
+    _linux_check_deps()
+    
+    windows = _linux_list_windows()
+    pattern = re.compile(title_pattern, re.IGNORECASE)
+    
+    matching = None
+    for win in windows:
+        if pattern.search(win.title):
+            matching = win
+            break
+    
+    if not matching:
+        raise WindowNotFoundError(f"No window matching '{title_pattern}'")
+    
+    try:
+        # First, bring window to front/activate it
+        subprocess.run(
+            ["wmctrl", "-i", "-a", matching.window_id],
+            capture_output=True, timeout=5
+        )
+        
+        # Remove fullscreen state if present (fullscreen != maximized)
+        subprocess.run(
+            ["wmctrl", "-i", "-r", matching.window_id, "-b", "remove,fullscreen"],
+            capture_output=True, timeout=5
+        )
+        
+        # Maximize using window manager (like clicking maximize button)
+        result = subprocess.run(
+            ["wmctrl", "-i", "-r", matching.window_id, "-b", "add,maximized_vert,maximized_horz"],
+            capture_output=True, timeout=5
+        )
+        
+        if result.returncode != 0:
+            raise WindowManagerError(f"wmctrl failed: {result.stderr.decode()}")
+        
+        return True
+    except subprocess.TimeoutExpired:
+        raise WindowManagerError("Timeout maximizing window")
+    except WindowManagerError:
+        raise
+    except Exception as e:
+        raise WindowManagerError(f"Failed to maximize window: {e}")
+
+
 # =============================================================================
 # Windows Backend
 # =============================================================================
@@ -844,6 +1070,15 @@ def _windows_get_window_id(title_pattern: str) -> Optional[str]:
 
 def _windows_fullscreen_window(title_pattern: str) -> bool:
     """Make a window fullscreen (maximized) on Windows."""
+    return _windows_maximize_window(title_pattern)
+
+
+def _windows_maximize_window(title_pattern: str) -> bool:
+    """Maximize a window on Windows using Win32 API.
+    
+    Uses ShowWindow with SW_MAXIMIZE which is the standard Windows way
+    to maximize a window (like clicking the maximize button).
+    """
     import ctypes
     
     windows = _windows_list_windows()
@@ -861,9 +1096,22 @@ def _windows_fullscreen_window(title_pattern: str) -> bool:
     user32 = ctypes.windll.user32
     hwnd = int(matching.window_id)
     
-    # SW_MAXIMIZE = 3
+    # First bring window to foreground
+    # SetForegroundWindow requires the window to be visible
+    SW_RESTORE = 9
     SW_MAXIMIZE = 3
-    user32.ShowWindow(hwnd, SW_MAXIMIZE)
+    
+    # Restore first if minimized, then maximize
+    user32.ShowWindow(hwnd, SW_RESTORE)
+    user32.SetForegroundWindow(hwnd)
+    
+    # Now maximize (like clicking the maximize button)
+    result = user32.ShowWindow(hwnd, SW_MAXIMIZE)
+    
+    if not result:
+        # ShowWindow returns 0 if window was previously hidden
+        # This is not necessarily an error, check if it's maximized
+        pass
     
     return True
 
@@ -936,6 +1184,9 @@ def fullscreen_window(title_pattern: str) -> bool:
     On Linux: Uses wmctrl to add fullscreen state
     On Windows: Maximizes the window
     
+    Note: On macOS, fullscreen mode creates a separate Space which can cause
+    window title detection issues. Consider using maximize_window() instead.
+    
     Args:
         title_pattern: Regex pattern to match window title or app name
         
@@ -954,5 +1205,38 @@ def fullscreen_window(title_pattern: str) -> bool:
         return _linux_fullscreen_window(title_pattern)
     elif platform == "windows":
         return _windows_fullscreen_window(title_pattern)
+    else:
+        raise WindowManagerError(f"Unsupported platform: {platform}")
+
+
+def maximize_window(title_pattern: str) -> bool:
+    """Maximize a window by title pattern (fill screen without fullscreen mode).
+    
+    Unlike fullscreen_window(), this keeps the window in the same Space/workspace
+    and preserves the window title behavior. This is the RECOMMENDED approach
+    for demo recording as it avoids window title detection issues.
+    
+    On macOS: Uses Window > Zoom menu (like clicking maximize button)
+    On Linux: Uses wmctrl to maximize (like clicking maximize button)
+    On Windows: Uses ShowWindow SW_MAXIMIZE (like clicking maximize button)
+    
+    Args:
+        title_pattern: Regex pattern to match window title or app name
+        
+    Returns:
+        True if successful
+        
+    Raises:
+        WindowNotFoundError: No window matching the pattern
+        WindowManagerError: Failed to maximize window
+    """
+    platform = get_platform()
+    
+    if platform == "macos":
+        return _macos_maximize_window(title_pattern)
+    elif platform == "linux":
+        return _linux_maximize_window(title_pattern)
+    elif platform == "windows":
+        return _windows_maximize_window(title_pattern)
     else:
         raise WindowManagerError(f"Unsupported platform: {platform}")

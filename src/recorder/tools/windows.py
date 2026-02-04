@@ -67,59 +67,59 @@ def register_window_tools(mcp):
         
         return output
     
-    # Only register fullscreen tool in host mode (not available in container)
+    # Only register fullscreen/maximize tools in host mode (not available in container)
     if not is_container_environment():
-        @mcp.tool(description="Make browser window fullscreen for better demo recording. HOST MODE ONLY. Call after browser_navigate() and list_windows().")
-        async def fullscreen_window(window_title: str = None) -> str:
-            """Make a window fullscreen by title pattern.
+        @mcp.tool(description="Maximize browser window for demo recording. RECOMMENDED over fullscreen. HOST MODE ONLY. REQUIRES window_title parameter.")
+        async def maximize_window(window_title: str = None) -> str:
+            """Maximize a window to fill the screen (without entering fullscreen mode).
+            
+            RECOMMENDED for demo recording because:
+            - Keeps window title consistent (doesn't change on navigation)
+            - Stays in same Space/workspace on macOS
+            - No fullscreen animation delay
             
             Args:
-                window_title: Window title pattern to match (e.g., 'Chrome', 'Firefox').
-                             If not provided, will try to auto-detect browser window.
+                window_title: REQUIRED. Window title pattern to match (e.g., 'Google Chrome', 'Firefox').
+                             Use list_windows() to see available windows.
             
             Returns:
                 Status message indicating success or failure.
             """
             from ..utils.window_manager import (
-                fullscreen_window as _fullscreen_window,
-                list_windows as _list_windows,
+                maximize_window as _maximize_window,
                 WindowNotFoundError,
                 WindowManagerError,
                 get_platform,
             )
             
-            # Auto-detect browser if no title provided
+            # Require window_title to prevent operating on wrong window
             if not window_title:
-                browser_patterns = ["Chrome", "Firefox", "Safari", "Arc", "Brave", "Edge", "Chromium"]
-                try:
-                    windows = _list_windows()
-                    for win in windows:
-                        for pattern in browser_patterns:
-                            if pattern.lower() in (win.app_name or "").lower() or pattern.lower() in (win.title or "").lower():
-                                window_title = win.app_name or pattern
-                                break
-                        if window_title:
-                            break
-                except Exception:
-                    pass
-                
-                if not window_title:
-                    return "Could not auto-detect browser window. Please provide window_title parameter."
+                return (
+                    "ERROR: window_title parameter is REQUIRED.\n\n"
+                    "You must specify which window to maximize. Examples:\n"
+                    "  maximize_window(window_title='Google Chrome')\n"
+                    "  maximize_window(window_title='Firefox')\n"
+                    "  maximize_window(window_title='Safari')\n\n"
+                    "Use list_windows() to see all available windows and their exact names."
+                )
             
             try:
-                _fullscreen_window(window_title)
+                _maximize_window(window_title)
                 platform = get_platform()
                 
-                if platform == "macos":
-                    return f"Window '{window_title}' set to fullscreen mode.\nNote: macOS fullscreen animation takes ~1 second. Wait before recording."
-                elif platform == "linux":
-                    return f"Window '{window_title}' set to fullscreen mode."
-                elif platform == "windows":
-                    return f"Window '{window_title}' maximized."
-                else:
-                    return f"Window '{window_title}' fullscreen attempted."
+                return (
+                    f"Window '{window_title}' maximized.\n"
+                    f"Window will fill the screen while staying in the same Space.\n"
+                    f"The window title will remain consistent during navigation."
+                )
                     
             except WindowNotFoundError as e:
                 return f"Window not found: {str(e)}\nTip: Run list_windows() to see available windows."
             except WindowManagerError as e:
                 return f"Error: {str(e)}"
+        
+        # NOTE: fullscreen_window tool disabled - use maximize_window instead
+        # Native fullscreen mode on macOS causes issues:
+        # - Creates separate Space with inconsistent window titles
+        # - Requires animation delay before recording
+        # The maximize_window tool is the recommended approach.

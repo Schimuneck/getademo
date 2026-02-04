@@ -51,9 +51,14 @@ class HostBackend(RecordingBackend):
         """Detect browser window on the host system.
         
         Priority order:
-        1. Cursor IDE (when using cursor-browser-extension, browser is embedded)
-        2. Traditional browsers (Chrome, Firefox, Safari, etc.)
-        3. Any window with URL-like title
+        1. Traditional browsers (Chrome, Firefox, Safari, etc.) - ALWAYS prefer these
+           since they're standalone and more reliable to capture
+        2. Windows with URL-like titles (indicates browser content)
+        3. Cursor IDE - ONLY as last resort when using cursor-browser-extension
+        
+        The key insight: if a standalone browser (Chrome, Firefox, etc.) is open,
+        the user is likely using Playwright MCP or manual browsing, NOT the embedded
+        cursor-browser-extension. Always prefer standalone browsers.
         """
         from ..utils.window_manager import list_windows
         
@@ -62,24 +67,27 @@ class HostBackend(RecordingBackend):
         except Exception:
             return None
         
-        # Priority 1: Cursor IDE (embedded browser via cursor-browser-extension)
-        # When running in Cursor with cursor-browser-extension, we need to record
-        # the Cursor window itself since the browser is embedded
-        for win in windows:
-            if win.app_name == "Cursor":
-                return "Cursor"
-        
-        # Priority 2: Traditional browsers by app name
+        # Priority 1: Traditional browsers by app name
+        # ALWAYS prefer standalone browsers over Cursor - they're more reliable
+        # and indicate the user is using Playwright MCP or similar
         browser_apps = ["Google Chrome", "Firefox", "Safari", "Arc", "Brave", "Edge", "Chromium"]
         for win in windows:
             if win.app_name in browser_apps:
                 return win.app_name
         
-        # Priority 3: Any window with URL-like title
+        # Priority 2: Any window with URL-like title (could be browser)
         for win in windows:
             title = (win.title or "").lower()
             if any(x in title for x in ['http', 'localhost', '.com', '.io', '.org']):
-                return win.title[:50]  # Use first 50 chars as pattern
+                # Skip Cursor windows with project names that happen to match
+                if win.app_name != "Cursor":
+                    return win.title[:50]  # Use first 50 chars as pattern
+        
+        # Priority 3: Cursor IDE - ONLY when no standalone browser is available
+        # This is the fallback for cursor-browser-extension embedded browser
+        for win in windows:
+            if win.app_name == "Cursor":
+                return "Cursor"
         
         return None
     

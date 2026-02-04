@@ -37,9 +37,9 @@ parts too fast and others out of sync with narration.
 
 **CORRECT approach:**
 ```
-Scene 1: start_recording() -> actions -> stop_recording() -> audio -> sync
-Scene 2: start_recording() -> actions -> stop_recording() -> audio -> sync
-Scene 3: start_recording() -> actions -> stop_recording() -> audio -> sync
+Scene 1: start_recording(window_title="Google Chrome") -> actions -> stop_recording() -> audio -> sync
+Scene 2: start_recording(window_title="Google Chrome") -> actions -> stop_recording() -> audio -> sync
+Scene 3: start_recording(window_title="Google Chrome") -> actions -> stop_recording() -> audio -> sync
 Final:   concatenate_videos([scene1, scene2, scene3])
 ```
 
@@ -79,14 +79,14 @@ SCENE N:
 ```python
 browser_scroll(...)           # Action happens BEFORE recording
 browser_click(...)            # Viewer sees nothing
-start_recording()             # Records static result
+start_recording(window_title="Google Chrome")  # Records static result
 browser_wait_for(time=3)
 stop_recording()              # Boring! No motion captured
 ```
 
 **CORRECT** - Dynamic engaging video:
 ```python
-start_recording()             # Start FIRST
+start_recording(window_title="Google Chrome")  # Start FIRST, specify browser!
 browser_wait_for(time=2)      # Brief pause
 browser_scroll(...)           # Action captured on video!
 browser_wait_for(time=2)      # Viewer sees result
@@ -266,9 +266,7 @@ The recorder auto-detects your browser window (Chrome, Firefox, Safari, Arc, Bra
 For the best demo quality, make your browser window fullscreen before recording:
 
 ```python
-fullscreen_window()                    # Auto-detects browser
-# OR specify the browser:
-fullscreen_window(window_title="Chrome")
+maximize_window(window_title="Google Chrome")  # Fills screen, keeps title stable
 ```
 
 This tool:
@@ -284,7 +282,7 @@ SETUP_GUIDE_CONTAINER_FLOW = """
 ## Simple Recording Flow
 
 1. browser_navigate(url)     # Opens browser
-2. start_recording()         # Auto-detects browser - no args needed!
+2. start_recording(window_title="Google Chrome")  # Specify your browser!
 3. [perform demo actions]
 4. stop_recording()          # Saves video
 
@@ -321,8 +319,8 @@ SETUP_GUIDE_HOST_FLOW = """
 ## Simple Recording Flow
 
 1. browser_navigate(url)     # Opens browser
-2. fullscreen_window()       # Make browser fullscreen (recommended)
-3. start_recording()         # Auto-detects browser - no args needed!
+2. maximize_window(window_title="Google Chrome")    # Fill screen (recommended)
+3. start_recording(window_title="Google Chrome")    # Start recording
 4. [perform demo actions]
 5. stop_recording()          # Saves video
 
@@ -343,9 +341,9 @@ Execute these steps IN ORDER before recording any steps:
    # Expected output includes the browser window title
    # If empty: You forgot step 1 (navigate). Go back.
 
-3. MAKE FULLSCREEN (recommended for best quality)
-   fullscreen_window()
-   # Wait 1-2 seconds for the fullscreen transition to complete
+3. MAXIMIZE WINDOW (recommended for best quality)
+   maximize_window(window_title="Google Chrome")  # Fills screen, keeps title stable
+   # No animation delay needed with maximize (unlike fullscreen)
 
 4. VERIFY CONTENT
    browser_snapshot()
@@ -489,6 +487,11 @@ SETUP_GUIDE_HOST_ISSUES = """
 | Recording empty/black    | Window not visible/minimized | Ensure browser window is visible |
 | Permission denied (macOS)| Screen recording not allowed | Grant permission in System Settings > Privacy > Screen Recording |
 | Wrong content recorded   | Skipped verification       | Always snapshot before recording |
+| Wrong window recorded    | Auto-detect picked wrong app | Specify window_title='Chrome' explicitly |
+
+**TIP**: When recording, always check the "Window:" line in the output to verify
+the correct window is being recorded. If using Playwright MCP with Chrome, it
+should say "Google Chrome", not "Cursor".
 """
 
 SETUP_GUIDE_FOOTER = """
@@ -908,8 +911,13 @@ Before delivery:
 | Video plays too slow       | Recording was too short (ok, adds pause)     |
 | Window not found           | Run list_windows(), use correct pattern      |
 | Wrong content recorded     | Verify with snapshot before recording        |
+| Wrong window recorded      | Check "Window:" output, use window_title param |
 
 **The #1 cause of sync problems is recording too long.** Split into shorter scenes.
+
+**IMPORTANT**: Always verify the "Window:" line when recording starts. If it shows
+the wrong app (e.g., "Cursor" instead of "Google Chrome"), stop immediately and
+restart with: `start_recording(window_title="Google Chrome")`
 
 ---
 

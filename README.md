@@ -16,7 +16,7 @@ An MCP (Model Context Protocol) server that enables AI agents to create professi
 |------|-----------|-------------------|----------|
 | **Container STDIO** | STDIO | Playwright (included) | **Recommended** - Self-contained, all 36 tools |
 | **Container HTTP** | HTTP/SSE | Playwright (included) | OpenAI Responses API, remote access |
-| **Host** | STDIO | Playwright MCP (recommended) or cursor-browser-extension | Native browser, macOS screen capture, `fullscreen_window` tool |
+| **Host** | STDIO | Playwright MCP (recommended) or cursor-browser-extension | Native browser, macOS screen capture, `maximize_window` tool |
 
 ## Quick Start
 
@@ -125,7 +125,7 @@ python -m venv .venv && source .venv/bin/activate
 pip install -e ".[all]"
 ```
 
-> **Note:** Container mode is still the **overall recommended approach** as it's fully self-contained with all tools included. Use host mode when you need native screen capture or the `fullscreen_window` feature.
+> **Note:** Container mode is still the **overall recommended approach** as it's fully self-contained with all tools included. Use host mode when you need native screen capture or the `maximize_window` feature.
 
 #### If Using Host Mode: Pair with Playwright MCP
 
@@ -155,14 +155,14 @@ Add both servers to your Cursor MCP settings (`~/.cursor/mcp.json`):
 
 > **Note:** Playwright MCP requires Node.js. Install with: `npm install -g @anthropic-ai/mcp-server-playwright`
 
-#### Host Mode Exclusive: `fullscreen_window` Tool
+#### Host Mode Exclusive: `maximize_window` Tool
 
-Host mode includes the `fullscreen_window` tool (not available in container mode) that makes your browser window fullscreen for better quality recordings:
+Host mode includes the `maximize_window` tool (not available in container mode) that fills the screen for better quality recordings while keeping the window title stable:
 
 ```python
 browser_navigate(url="https://example.com")
-fullscreen_window()  # Makes browser fullscreen (macOS/Linux/Windows)
-start_recording()
+maximize_window(window_title="Google Chrome")  # RECOMMENDED - fills screen, stable title
+start_recording(window_title="Google Chrome")
 # ... demo actions ...
 ```
 
@@ -201,7 +201,7 @@ start_recording()
 ### Recording Tools
 | Tool | Description |
 |------|-------------|
-| `start_recording` | Start video recording (auto-detects browser window) |
+| `start_recording` | Start video recording (requires `window_title` parameter) |
 | `stop_recording` | Stop recording and save the video file |
 | `recording_status` | Check if recording is in progress |
 
@@ -231,7 +231,7 @@ start_recording()
 |------|-------------|
 | `list_windows` | List visible windows |
 | `window_tools` | Check window management tool availability |
-| `fullscreen_window` | Make browser window fullscreen (**host mode only**) |
+| `maximize_window` | Maximize browser window to fill screen (requires `window_title`, **host mode only**) |
 
 **Container mode** also includes all 22 **Playwright browser tools** (`browser_navigate`, `browser_click`, `browser_snapshot`, etc.) through the proxy multiplexer.
 
@@ -279,7 +279,7 @@ Demos are recorded as **short scenes (10-30 seconds each)**, not one long video.
 ```
 SCENE N:
 1. browser_snapshot()            # Verify starting position
-2. start_recording()             # START recording
+2. start_recording(window_title="Google Chrome")  # START recording
 3. browser_wait_for(time=2)      # Viewer sees initial state
 4. [scroll, click, or type]      # ACTION captured on video!
 5. browser_wait_for(time=2)      # Viewer sees result
@@ -294,14 +294,14 @@ SCENE N:
 **WRONG** (static video):
 ```python
 browser_scroll(400)           # NOT recorded
-start_recording()
+start_recording(window_title="Google Chrome")
 browser_wait_for(time=5)      # Static page
 stop_recording()
 ```
 
 **CORRECT** (dynamic video):
 ```python
-start_recording()
+start_recording(window_title="Google Chrome")
 browser_wait_for(time=2)
 browser_scroll(400)           # CAPTURED!
 browser_wait_for(time=2)
@@ -350,8 +350,8 @@ media_info(filename="demo_final.mp4")
 ```python
 # === SETUP ===
 browser_navigate(url="https://example.com")
-fullscreen_window()  # Host mode exclusive - make browser fullscreen
-browser_wait_for(time=2)  # Wait for fullscreen animation (especially on macOS)
+maximize_window(window_title="Google Chrome")  # Fills screen, keeps title stable
+# No need to wait - maximize doesn't have animation like fullscreen
 
 # === SCENE 1: Homepage ===
 browser_snapshot()
