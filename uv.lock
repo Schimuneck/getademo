@@ -1991,6 +1991,7 @@ name = "recorder"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "edge-tts" },
     { name = "fastmcp" },
 ]
 
@@ -2019,6 +2020,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "edge-tts", specifier = ">=6.0" },
     { name = "edge-tts", marker = "extra == 'edge'", specifier = ">=6.0" },
     { name = "fastmcp", specifier = ">=2.0.0" },
     { name = "openai", marker = "extra == 'openai'", specifier = ">=1.0" },

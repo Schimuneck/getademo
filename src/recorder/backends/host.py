@@ -95,7 +95,7 @@ class HostBackend(RecordingBackend):
         self,
         window_title: str,
         fps: int = 30
-    ) -> Tuple[List[str], Optional[str], Optional[str]]:
+    ) -> Tuple[List[str], Optional[str], Optional[str], Optional[Tuple[int, int]]]:
         """Get platform-specific capture arguments."""
         from ..utils.window_manager import get_window_id, get_window_bounds
         
@@ -106,13 +106,13 @@ class HostBackend(RecordingBackend):
         elif sys.platform == "win32":
             return self._get_windows_capture_args(window_title, fps)
         else:
-            return [], None, f"Unsupported platform: {sys.platform}"
+            return [], None, f"Unsupported platform: {sys.platform}", None
     
     def _get_macos_capture_args(
         self,
         window_title: str,
         fps: int
-    ) -> Tuple[List[str], Optional[str], Optional[str]]:
+    ) -> Tuple[List[str], Optional[str], Optional[str], Optional[Tuple[int, int]]]:
         """macOS: Use AVFoundation with multi-monitor support.
         
         Detects which screen the window is on and captures that screen,
@@ -129,16 +129,29 @@ class HostBackend(RecordingBackend):
         try:
             bounds = get_window_bounds(window_title)
         except Exception as e:
-            return [], None, f"Window '{window_title}' not found: {e}"
+            return [], None, f"Window '{window_title}' not found: {e}", None
         
         # Get screen info to determine which monitor the window is on
         screen_info = self._get_macos_screens()
-        screen_index, crop_x, crop_y, scale_factor = self._find_screen_for_window(bounds, screen_info)
+        nsscreen_index, crop_x, crop_y, scale_factor = self._find_screen_for_window(bounds, screen_info)
         
-        # AVFoundation device indices: 0=camera, 1=screen0, 2=screen1, etc.
-        # NSScreen uses 1-based indexing which happens to match AVFoundation screen devices
-        # (because camera is at index 0, screens start at index 1)
-        avfoundation_index = screen_index
+        # Get the screen we're capturing from - needed to clamp crop to capture dimensions
+        capture_screen = next(
+            (s for s in screen_info if s["index"] == nsscreen_index),
+            screen_info[0] if screen_info else {"width": 1920, "height": 1080, "scale": 2}
+        )
+        capture_width = capture_screen["width"] * capture_screen.get("scale", scale_factor)
+        capture_height = capture_screen["height"] * capture_screen.get("scale", scale_factor)
+        
+        # AVFoundation device indices vary: cameras come first, then "Capture screen 0", "Capture screen 1", etc.
+        # Systems with OBS/virtual cameras may have screens at index 6+ - parse ffmpeg output to find the correct one
+        avfoundation_index = self._get_avfoundation_screen_index(nsscreen_index)
+        
+        # Probe actual capture dimensions - NSScreen and AVFoundation can report different resolutions
+        actual_capture_w, actual_capture_h = self._probe_avfoundation_dimensions(avfoundation_index)
+        if actual_capture_w and actual_capture_h:
+            capture_width = actual_capture_w
+            capture_height = actual_capture_h
         
         # Scale dimensions for Retina displays (typically 2x on modern Macs)
         # FFmpeg captures at actual pixel resolution, not logical resolution
@@ -146,6 +159,15 @@ class HostBackend(RecordingBackend):
         scaled_height = bounds.height * scale_factor
         scaled_crop_x = crop_x * scale_factor
         scaled_crop_y = crop_y * scale_factor
+        
+        # Clamp crop to capture dimensions - window bounds can exceed capture when coordinate
+        # systems differ (e.g. CGWindowList vs NSScreen, or multi-monitor)
+        max_width = int(capture_width - scaled_crop_x)
+        max_height = int(capture_height - scaled_crop_y)
+        scaled_width = min(scaled_width, max_width)
+        scaled_height = min(scaled_height, max_height)
+        scaled_width = max(2, scaled_width)
+        scaled_height = max(2, scaled_height)
         
         # Ensure even dimensions for h264 encoding
         width = scaled_width if scaled_width % 2 == 0 else scaled_width - 1
@@ -155,13 +177,22 @@ class HostBackend(RecordingBackend):
         crop_x_final = scaled_crop_x if scaled_crop_x % 2 == 0 else scaled_crop_x + 1
         crop_y_final = scaled_crop_y if scaled_crop_y % 2 == 0 else scaled_crop_y + 1
         
+        # Final clamp: crop region must fit within capture
+        if crop_x_final + width > capture_width or crop_y_final + height > capture_height:
+            width = min(width, int(capture_width) - crop_x_final)
+            height = min(height, int(capture_height) - crop_y_final)
+            width = width if width % 2 == 0 else width - 1
+            height = height if height % 2 == 0 else height - 1
+            width = max(2, width)
+            height = max(2, height)
+        
         return [
             "-f", "avfoundation",
             "-capture_cursor", "1",
             "-framerate", str(fps),
             "-pixel_format", "uyvy422",
             "-i", f"{avfoundation_index}:none",
-        ], f"crop={width}:{height}:{crop_x_final}:{crop_y_final}", None
+        ], f"crop={width}:{height}:{crop_x_final}:{crop_y_final}", None, (width, height)
     
     def _get_macos_screens(self) -> List[dict]:
         """Get list of screens with their bounds and scale factor on macOS.
@@ -215,6 +246,76 @@ return screenList
         except Exception:
             return [{"index": 1, "x": 0, "y": 0, "width": 1920, "height": 1080, "scale": 2}]
     
+    def _probe_avfoundation_dimensions(self, device_index: int) -> Tuple[Optional[int], Optional[int]]:
+        """Probe actual capture dimensions from AVFoundation.
+        
+        Returns (width, height) or (None, None) if probe fails.
+        """
+        import subprocess
+        import re
+        
+        try:
+            result = subprocess.run(
+                [
+                    self._get_ffmpeg_path(),
+                    "-f", "avfoundation",
+                    "-i", f"{device_index}:none",
+                    "-t", "0.001",
+                    "-f", "null", "-",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            output = (result.stdout or "") + (result.stderr or "")
+            # Match "3024x1964" from stream info like "Stream #0:0: Video: rawvideo ... 3024x1964"
+            match = re.search(r"Stream #\d+:\d+.*?(\d{3,5})x(\d{3,5})", output)
+            if match:
+                return int(match.group(1)), int(match.group(2))
+        except Exception:
+            pass
+        return None, None
+    
+    def _get_avfoundation_screen_index(self, nsscreen_index: int) -> int:
+        """Get AVFoundation device index for the given NSScreen.
+        
+        AVFoundation device order varies: cameras (built-in, virtual, etc.) come first,
+        then 'Capture screen 0', 'Capture screen 1', etc. Parse ffmpeg output to find
+        the correct index instead of assuming screens start at 1.
+        
+        Args:
+            nsscreen_index: 1-based NSScreen index (1 = first screen)
+            
+        Returns:
+            AVFoundation device index for that screen
+        """
+        import subprocess
+        import re
+        
+        try:
+            result = subprocess.run(
+                [self._get_ffmpeg_path(), "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+                capture_output=True, text=True, timeout=5
+            )
+            # FFmpeg outputs device list to stderr
+            output = (result.stdout or "") + (result.stderr or "")
+            # Match "[N] Capture screen M" - N is device index, M is screen number (0-based)
+            # nsscreen_index 1 -> Capture screen 0, nsscreen_index 2 -> Capture screen 1, etc.
+            target_screen_num = nsscreen_index - 1
+            pattern = rf"\[\s*(\d+)\s*\]\s*Capture screen\s+{target_screen_num}\b"
+            match = re.search(pattern, output)
+            if match:
+                return int(match.group(1))
+        except Exception:
+            pass
+        # Fallback: assume screens start after cameras (legacy behavior for simple setups)
+        return nsscreen_index
+    
+    def _get_ffmpeg_path(self) -> str:
+        """Get path to ffmpeg executable."""
+        from ..core.config import get_ffmpeg_path
+        return get_ffmpeg_path()
+    
     def _find_screen_for_window(self, bounds, screens: List[dict]) -> Tuple[int, int, int, int]:
         """Find which screen contains the window and calculate relative coordinates.
         
@@ -265,13 +366,13 @@ return screenList
         self,
         window_title: str,
         fps: int
-    ) -> Tuple[List[str], Optional[str], Optional[str]]:
+    ) -> Tuple[List[str], Optional[str], Optional[str], Optional[Tuple[int, int]]]:
         """Linux: Use x11grab with native X11 display."""
         from ..utils.window_manager import get_window_id, get_window_bounds
         
         window_id = get_window_id(window_title)
         if not window_id:
-            return [], None, f"Window '{window_title}' not found."
+            return [], None, f"Window '{window_title}' not found.", None
         
         try:
             bounds = get_window_bounds(window_title)
@@ -286,22 +387,22 @@ return screenList
                 "-video_size", f"{width}x{height}",
                 "-framerate", str(fps),
                 "-i", f"{display}+{bounds.x},{bounds.y}",
-            ], None, None
+            ], None, None, None
             
         except Exception as e:
-            return [], None, f"Could not get window bounds: {e}"
+            return [], None, f"Could not get window bounds: {e}", None
     
     def _get_windows_capture_args(
         self,
         window_title: str,
         fps: int
-    ) -> Tuple[List[str], Optional[str], Optional[str]]:
+    ) -> Tuple[List[str], Optional[str], Optional[str], Optional[Tuple[int, int]]]:
         """Windows: Use gdigrab with window title."""
         return [
             "-f", "gdigrab",
             "-framerate", str(fps),
             "-i", f"title={window_title}",
-        ], None, None
+        ], None, None, None
     
     def get_window_bounds(self, window_title: str) -> Optional[WindowBounds]:
         """Get window bounds using platform-specific methods."""

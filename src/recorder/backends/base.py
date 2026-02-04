@@ -49,7 +49,7 @@ class RecordingBackend(ABC):
         self,
         window_title: str,
         fps: int = 30
-    ) -> Tuple[List[str], Optional[str], Optional[str]]:
+    ) -> Tuple[List[str], Optional[str], Optional[str], Optional[Tuple[int, int]]]:
         """Get FFmpeg capture arguments for the specified window.
         
         Args:
@@ -57,8 +57,10 @@ class RecordingBackend(ABC):
             fps: Frames per second for recording.
             
         Returns:
-            Tuple of (ffmpeg_args, crop_filter, error_message).
+            Tuple of (ffmpeg_args, crop_filter, error_message, output_dimensions).
             If error_message is set, the other values should be ignored.
+            output_dimensions: Optional (width, height) to preserve capture scale
+            (e.g. Retina pixel density). If None, logical window bounds are used.
         """
         pass
     
@@ -129,7 +131,12 @@ class RecordingBackend(ABC):
             )
         
         # Get capture arguments
-        capture_args, crop_filter, error = self.get_capture_args(window_title, fps)
+        result = self.get_capture_args(window_title, fps)
+        if len(result) == 4:
+            capture_args, crop_filter, error, output_dimensions = result
+        else:
+            capture_args, crop_filter, error = result
+            output_dimensions = None
         if error:
             return RecordingResult(success=False, message=error)
         
@@ -140,12 +147,15 @@ class RecordingBackend(ABC):
         except Exception:
             pass  # Continue anyway
         
-        # Get window bounds for output size
-        bounds = self.get_window_bounds(window_title)
-        if bounds:
-            width, height = bounds.width, bounds.height
+        # Get output dimensions: use backend-provided (preserves Retina scale) or logical bounds
+        if output_dimensions:
+            width, height = output_dimensions
         else:
-            width, height = 1920, 1080
+            bounds = self.get_window_bounds(window_title)
+            if bounds:
+                width, height = bounds.width, bounds.height
+            else:
+                width, height = 1920, 1080
         
         # Ensure even dimensions for h264 encoding
         width = width if width % 2 == 0 else width - 1
@@ -156,10 +166,15 @@ class RecordingBackend(ABC):
         cmd = [ffmpeg, "-y", *capture_args]
         
         # Add video filter if needed
+        # Use force_original_aspect_ratio=decrease + pad to preserve aspect ratio
+        # (avoids stretching when capture/crop dimensions don't match exactly)
         video_filters = []
         if crop_filter:
             video_filters.append(crop_filter)
-        video_filters.append(f"scale={width}:{height}")
+        video_filters.append(
+            f"scale={width}:{height}:force_original_aspect_ratio=decrease:"
+            f"force_divisible_by=2,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2"
+        )
         
         if video_filters:
             cmd.extend(["-vf", ",".join(video_filters)])

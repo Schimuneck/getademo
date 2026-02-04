@@ -62,7 +62,7 @@ class ContainerBackend(RecordingBackend):
         # Verify window exists
         window_id = get_window_id(window_title)
         if not window_id:
-            return [], None, f"Window '{window_title}' not found. Use list_windows to see available windows."
+            return [], None, f"Window '{window_title}' not found. Use list_windows to see available windows.", None
         
         # Get window bounds
         try:
@@ -82,10 +82,10 @@ class ContainerBackend(RecordingBackend):
                 "-video_size", f"{width}x{height}",
                 "-framerate", str(fps),
                 "-i", f"{display}.0+{x},{y}",
-            ], None, None
+            ], None, None, None
             
         except Exception as e:
-            return [], None, f"Could not get window bounds: {e}"
+            return [], None, f"Could not get window bounds: {e}", None
     
     def get_window_bounds(self, window_title: str) -> Optional[WindowBounds]:
         """Get window bounds using wmctrl/xdotool."""

@@ -44,6 +44,7 @@ classifiers = [
 
 dependencies = [
     "fastmcp>=2.0.0",
+    "edge-tts>=6.0",
 ]
 
 [project.optional-dependencies]
